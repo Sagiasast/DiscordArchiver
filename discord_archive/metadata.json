@@ -1,0 +1,43 @@
+{
+  "last_archive_time": "2026-01-12T14:14:44.460416+00:00",
+  "channels": {
+    "1458493700819910902": {
+      "id": 1458493700819910902,
+      "name": "general",
+      "topic": null,
+      "position": 0,
+      "category": "Text Channels",
+      "message_count": 8,
+      "last_message_id": 1460268421760549040
+    },
+    "1458493912166699040": {
+      "id": 1458493912166699040,
+      "name": "private-test-channel",
+      "topic": null,
+      "position": 1,
+      "category": "Text Channels",
+      "message_count": 0,
+      "last_message_id": null
+    },
+    "1458496500115181598": {
+      "id": 1458496500115181598,
+      "name": "private-admin-only",
+      "topic": null,
+      "position": 2,
+      "category": "Text Channels",
+      "message_count": 0,
+      "last_message_id": null
+    }
+  },
+  "server_info": {
+    "1458493700287103214": {
+      "id": 1458493700287103214,
+      "name": "Sandbox for Bots",
+      "description": null,
+      "member_count": 4,
+      "created_at": "2026-01-07T16:13:15.651000+00:00",
+      "archived_at": "2026-01-12T14:14:43.861572+00:00",
+      "icon_url": null
+    }
+  }
+}

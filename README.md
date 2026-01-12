@@ -1,13 +1,96 @@
-# discord-archive
-Create local archive of a Discord server including visualization with HTML and local search
+# Discord Archive 
 
-Goals:
-- Definition of a scalable, browseable and searchable data file structure (e.g. based on HTML) to archive a discord server with multiple channels. If third party tools are needed to view the stored data, these should be open source
-- Programming a bot which scans and automatically archives all the current data
-- Programming a bot which adds the latest data to the archive (e.g. live, daily, weekly). This may be a configuration in the previous bot
+## Overview
 
-Ideas:
-- Use/adopt [Discard](https://github.com/Sanqui/discard) or [ChatExporter](https://github.com/Tyrrrz/DiscordChatExporter) or some other tools
-- Implement a Python script to transform the archive to HTML format
-- HTML export using static browser pages, layout similar to Discord, channel list on the left, scrollable pages with messages on the right, auto-reloading. The HTML should be splitted into several pages for large channels.
-- Search and filter box incl. date range, author, text string (with wildcards), based on a text file export of messages (without SQL etc.). A click on the search result should go to the archived HTML page
+
+```mermaid
+graph BT
+    subgraph External
+        DISCORD[Discord Server]
+        BROWSER[Web Browser]
+    end
+    
+    subgraph Processing
+        BOT[Archiver Bot]
+        STORAGE[(JSON Storage)]
+    end
+    
+    subgraph Tools
+        HTML[HTML Generator]
+        SEARCH[Search Tool]
+    end
+    
+    subgraph Output
+        WEBSITE[Static Website]
+        RESULTS[Search Results]
+    end
+    
+    BOT -->|Messages via API| DISCORD
+    BOT -->|Writes| STORAGE
+    HTML -->|Reads| STORAGE
+    SEARCH -->|Reads| STORAGE
+    HTML -->|Generates| WEBSITE
+    SEARCH -->|Creates| RESULTS
+    WEBSITE -->|Viewed in| BROWSER
+    
+    style DISCORD fill:#7289DA
+    style STORAGE fill:#4CAF50
+```
+
+## Core Scripts
+
+The Discord Archive System consists of three main Python scripts that work together to archive, display, and search Discord server data.
+
+### 1. **discord_archiver.py** 
+*The main archiving script that fetches and stores Discord data*
+
+- Connects to Discord via bot token
+- Fetches complete message history
+- Preserves all message metadata
+- Auto-update scheduling (Configurable update intervals)
+    - Background task execution
+
+
+#### Output:
+```
+discord_archive/
+├── metadata.json
+└── server_123456789/
+    ├── server_info.json
+    ├── channels.json
+    └── channel_*/
+        ├── messages.json
+        └── messages.txt
+```
+
+### 2. **html_generator.py**
+*Converts JSON archives into a static website with Discord-like interface*
+
+- Discord-like UI
+- Pagination support
+
+```
+discord_html/
+└── server_123456789/
+    ├── index.html
+    ├── style.css
+    ├── script.js
+```
+
+
+### 3. **search_tool.py**
+*Search across archived messages*
+
+- **Multi-filter Searching**
+- Filtering capabilities like:
+    - Filter by author/user
+    - Filter by channel
+    - Date range
+    - Combine multiple filters
+- Export to Multiple Formats
+    - JSON
+    - TXT
+
+
+
+
