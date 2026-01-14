@@ -255,14 +255,14 @@ class DiscordArchiver(commands.Bot):
         """Perform full server archive"""
         await ctx.send('Starting full server archive...')
         await self.archive_server(ctx.guild, incremental=False)
-        await ctx.send('✅ Full archive completed!')
+        await ctx.send('Full archive completed!')
     
     @commands.command(name='update')
     async def archive_update(self, ctx):
         """Update archive with new messages"""
         await ctx.send('Starting incremental archive update...')
         await self.archive_server(ctx.guild, incremental=True)
-        await ctx.send('✅ Archive updated!')
+        await ctx.send('Archive updated!')
     
     @commands.command(name='status')
     async def archive_status(self, ctx):

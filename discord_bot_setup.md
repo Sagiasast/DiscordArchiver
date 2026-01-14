@@ -27,13 +27,13 @@ https://discord.com/developers/applications/
     1. Developer Portal → OAuth2 → URL Generator
 
     2. Under Scopes, check:
-        ✅ bot
+        -bot
 
     3. Under Bot Permissions, check at minimum:
-        ✅ View Channels
-        ✅ Read Message History
-        ✅ Send Messages 
-        ✅ Embed Links 
+        -View Channels
+        -Read Message History
+        -Send Messages 
+        -Embed Links 
 
     4. Copy the generated URL at the bottom and open it in your browser.
     5. Pick your server and authorize.
