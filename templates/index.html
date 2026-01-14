@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{title}}</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <div class="server-header">
+        <h1>{{server_name}}</h1>
+        <p class="server-info">Archived: {{archived_at}}</p>
+        <p class="server-info">Members: {{member_count}}</p>
+      </div>
+
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Search messages..." />
+        <button onclick="showSearchModal()">Advanced Search</button>
+      </div>
+
+      <div class="channels-list">
+        <h2>Channels</h2>
+        {{channel_list}}
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="welcome">
+        <h2>Welcome to the Archive</h2>
+        <p>Select a channel from the sidebar to view messages.</p>
+        <p>Use the search box to find specific messages across all channels or Ctrl/Cmd + F for advanced search.</p>
+      </div>
+    </div>
+  </div>
+
+  {{> components/search_modal.html }}
+
+  <script src="script.js"></script>
+</body>
+</html>

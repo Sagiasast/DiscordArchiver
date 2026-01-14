@@ -125,15 +125,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
 // Keyboard shortcuts
 document.addEventListener('keydown', function (e) {
-  // Ctrl/Cmd + F to focus search
-  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+  // Ctrl/Cmd + K to focus search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
     e.preventDefault();
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.focus();
   }
 
-  // Ctrl/Cmd + K for advanced search
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+  // Ctrl/Cmd + F for advanced search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     e.preventDefault();
     showSearchModal();
   }
@@ -146,6 +146,6 @@ document.addEventListener('keydown', function (e) {
 
 console.log('Discord Archive Viewer loaded');
 console.log('Keyboard shortcuts:');
-console.log('  Ctrl/Cmd + F: Focus search');
-console.log('  Ctrl/Cmd + K: Advanced search');
+console.log('  Ctrl/Cmd + K: Focus search');
+console.log('  Ctrl/Cmd + F: Advanced search');
 console.log('  Escape: Close modal');

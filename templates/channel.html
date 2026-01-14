@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{title}}</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    {{> components/sidebar.html }}
+
+    <div class="main-content">
+      {{> components/channel_header.html }}
+
+      <div class="messages">
+        {{messages_html}}
+      </div>
+
+      <div class="channel-footer">
+        {{pagination}}
+      </div>
+    </div>
+  </div>
+
+  {{> components/search_modal.html }}
+
+  <script src="script.js"></script>
+</body>
+</html>
