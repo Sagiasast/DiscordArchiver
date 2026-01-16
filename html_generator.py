@@ -21,11 +21,13 @@ import re
 
 class HTMLGenerator:
     def __init__(self, archive_path: str = "./discord_archive",
-                 output_path: str = "./discord_html"):
+                 output_path: str = "./discord_html",
+                 index_chunk_size: int = 5000):
         self.archive_path = Path(archive_path)
         self.output_path = Path(output_path)
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.messages_per_page = 500  # Split into pages for large channels
+        self.index_chunk_size = index_chunk_size  # Messages per search index chunk
 
         self.templates_dir = Path(__file__).parent / "templates"
         self.components_dir = self.templates_dir / "components"
@@ -109,6 +111,9 @@ class HTMLGenerator:
                 channel,
                 server_info
             )
+
+        # Generate search index for client-side search
+        self.generate_search_index(server_path, output_dir, channels)
 
         # Copy CSS and JS into output folder
         self.generate_static_files(output_dir)
@@ -382,6 +387,83 @@ class HTMLGenerator:
             )
         html_parts.append("</div>")
         return "\n".join(html_parts)
+
+    def generate_search_index(self, server_path: Path, output_dir: Path, channels: List[Dict]):
+        """
+        Generate chunked search index for client-side search.
+        Creates a compact index with message data for fast browser-based searching.
+        """
+        all_messages = []
+        channel_map = {}  # channel_id -> {name, category}
+        author_set = set()
+
+        # Build channel map and collect all messages
+        for channel in channels:
+            channel_id = str(channel['id'])
+            channel_map[channel_id] = {
+                'name': channel.get('name', 'unknown'),
+                'category': channel.get('category', 'Uncategorized')
+            }
+
+            messages_file = server_path / f"channel_{channel['id']}" / "messages.json"
+            if not messages_file.exists():
+                continue
+
+            with open(messages_file, 'r', encoding='utf-8') as f:
+                messages = json.load(f)
+
+            for msg in messages:
+                author_name = msg['author'].get('display_name', msg['author']['name'])
+                author_set.add(author_name)
+
+                # Calculate which page this message is on
+                msg_index = messages.index(msg)
+                page_num = (msg_index // self.messages_per_page) + 1
+
+                # Compact format: [id, channel_id, author, timestamp, content, page]
+                all_messages.append({
+                    'i': msg['id'],  # message id
+                    'c': channel_id,  # channel id
+                    'a': author_name,  # author display name
+                    't': msg['timestamp'][:10],  # date only (YYYY-MM-DD)
+                    'x': msg.get('content', '')[:500],  # content (truncated for index)
+                    'p': page_num  # page number
+                })
+
+        # Sort by timestamp descending (newest first)
+        all_messages.sort(key=lambda m: m['t'], reverse=True)
+
+        # Generate manifest with metadata
+        total_chunks = max(1, (len(all_messages) + self.index_chunk_size - 1) // self.index_chunk_size)
+        
+        manifest = {
+            'version': 1,
+            'totalMessages': len(all_messages),
+            'totalChunks': total_chunks,
+            'chunkSize': self.index_chunk_size,
+            'channels': channel_map,
+            'authors': sorted(list(author_set)),
+            'dateRange': {
+                'start': all_messages[-1]['t'] if all_messages else None,
+                'end': all_messages[0]['t'] if all_messages else None
+            }
+        }
+
+        # Write manifest
+        with open(output_dir / 'search_manifest.json', 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, separators=(',', ':'))
+
+        # Write chunked index files
+        for chunk_num in range(total_chunks):
+            start_idx = chunk_num * self.index_chunk_size
+            end_idx = min(start_idx + self.index_chunk_size, len(all_messages))
+            chunk_data = all_messages[start_idx:end_idx]
+
+            chunk_file = output_dir / f'search_index_{chunk_num}.json'
+            with open(chunk_file, 'w', encoding='utf-8') as f:
+                json.dump(chunk_data, f, separators=(',', ':'), ensure_ascii=False)
+
+        print(f"  Generated search index: {len(all_messages)} messages in {total_chunks} chunks")
 
     def generate_static_files(self, output_dir: Path):
         """Copy CSS and JavaScript files from templates/"""

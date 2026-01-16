@@ -534,6 +534,142 @@ body {
     background-color: #faa61a;
     color: #000;
     padding: 0 2px;
+    border-radius: 2px;
+}
+
+/* Enhanced Search Styles */
+.form-row {
+    display: flex;
+    gap: 16px;
+}
+
+.form-group-half {
+    flex: 1;
+}
+
+.form-group select {
+    width: 100%;
+    padding: 10px;
+    background-color: #40444b;
+    border: 1px solid #202225;
+    border-radius: 4px;
+    color: #dcddde;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.form-group select:focus {
+    outline: none;
+    border-color: #5865f2;
+}
+
+.form-group select optgroup {
+    background-color: #2f3136;
+    color: #8e9297;
+}
+
+.form-group select option {
+    background-color: #40444b;
+    color: #dcddde;
+    padding: 8px;
+}
+
+.search-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.search-btn-icon {
+    font-size: 16px;
+}
+
+.search-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: #72767d;
+}
+
+.search-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid #40444b;
+    border-top-color: #5865f2;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.search-progress {
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.search-placeholder {
+    color: #72767d;
+    text-align: center;
+    padding: 40px 20px;
+    font-size: 14px;
+}
+
+.search-no-results {
+    color: #72767d;
+    text-align: center;
+    padding: 40px 20px;
+}
+
+.search-error {
+    color: #ed4245;
+    text-align: center;
+    padding: 20px;
+}
+
+.search-count {
+    color: #72767d;
+    font-size: 13px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #40444b;
+}
+
+.search-more {
+    color: #72767d;
+    font-size: 13px;
+    text-align: center;
+    padding: 16px;
+    border-top: 1px solid #40444b;
+    margin-top: 8px;
+}
+
+.search-result {
+    display: block;
+    text-decoration: none;
+}
+
+.search-result-meta {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.search-result-date {
+    color: #72767d;
+    font-size: 12px;
+}
+
+/* Message highlight when navigating from search */
+.message-highlighted {
+    animation: highlight-pulse 3s ease-out;
+}
+
+@keyframes highlight-pulse {
+    0% { background-color: rgba(88, 101, 242, 0.4); }
+    100% { background-color: transparent; }
 }
 
 /* Scrollbar */
@@ -570,5 +706,16 @@ body {
     .message-avatar {
         width: 32px;
         margin-right: 12px;
+    }
+    
+    .form-row {
+        flex-direction: column;
+        gap: 0;
+    }
+    
+    .modal-content {
+        width: 95%;
+        margin: 2% auto;
+        padding: 20px;
     }
 }

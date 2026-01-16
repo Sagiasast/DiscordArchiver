@@ -1,29 +1,48 @@
 <div id="searchModal" class="modal">
   <div class="modal-content">
     <span class="close" onclick="hideSearchModal()">&times;</span>
-    <h2>Advanced Search</h2>
+    <h2>🔍 Advanced Search</h2>
 
     <div class="search-form">
       <div class="form-group">
-        <label>Search Text:</label>
-        <input type="text" id="search-text" placeholder="Enter search text..." />
+        <label for="search-text">Search Text:</label>
+        <input type="text" id="search-text" placeholder="Enter search text..." autocomplete="off" />
       </div>
 
-      <div class="form-group">
-        <label>Author:</label>
-        <input type="text" id="search-author" placeholder="Author name..." />
+      <div class="form-row">
+        <div class="form-group form-group-half">
+          <label for="search-author">Author:</label>
+          <input type="text" id="search-author" placeholder="Author name..." list="author-suggestions" autocomplete="off" />
+          <datalist id="author-suggestions"></datalist>
+        </div>
+
+        <div class="form-group form-group-half">
+          <label for="search-channel">Channel:</label>
+          <select id="search-channel">
+            <option value="">All Channels</option>
+          </select>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label>Date Range:</label>
-        <input type="date" id="search-date-from" />
-        <span> to </span>
-        <input type="date" id="search-date-to" />
+      <div class="form-row">
+        <div class="form-group form-group-half">
+          <label for="search-date-from">From Date:</label>
+          <input type="date" id="search-date-from" />
+        </div>
+
+        <div class="form-group form-group-half">
+          <label for="search-date-to">To Date:</label>
+          <input type="date" id="search-date-to" />
+        </div>
       </div>
 
-      <button onclick="performSearch()" class="search-btn">Search</button>
+      <button onclick="performSearch()" class="search-btn">
+        <span class="search-btn-icon">🔍</span> Search All Messages
+      </button>
     </div>
 
-    <div id="search-results" class="search-results"></div>
+    <div id="search-results" class="search-results">
+      <p class="search-placeholder">Enter search criteria and click Search to find messages across all channels.</p>
+    </div>
   </div>
 </div>
