@@ -136,14 +136,37 @@ python run.py status         # Show current status
 
 #### Archiver Commands
 ```bash
-python run.py start [--include-bots]    # Start archiver in background
-python run.py stop                      # Stop background archiver
-python run.py archive [--include-bots]  # Run archiver in foreground
-python run.py logs                      # Show archiver logs
+python run.py start [options]    # Start archiver in background
+python run.py stop               # Stop background archiver
+python run.py archive [options]  # Run archiver in foreground
+python run.py logs               # Show archiver logs
 ```
 
-**Flags:**
-- `--include-bots` - Include bot-authored messages (default: False)
+**Archiver Options:**
+| Option | Description |
+|--------|-------------|
+| `--include-bots` | Include bot-authored messages (default: off) |
+| `--limit N` | Limit messages per channel (default: unlimited) |
+| `--channel NAME/ID` | Only archive specific channel (can repeat) |
+| `--download-attachments` | Download images/files locally (default: off) |
+
+**Examples:**
+```bash
+# Archive everything
+python run.py start
+
+# Archive only 100 messages per channel
+python run.py start --limit 100
+
+# Archive only specific channels
+python run.py start --channel general --channel announcements
+
+# Download all attachments (images, files) locally
+python run.py start --download-attachments
+
+# Combine options
+python run.py start --limit 500 --channel general --include-bots --download-attachments
+```
 
 #### HTML Commands
 ```bash
@@ -166,11 +189,18 @@ You can also run the scripts directly:
 
 #### Archive Messages
 ```bash
-python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [--include-bots]
+python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [options]
+
+# Options:
+#   --include-bots         Include bot-authored messages
+#   --limit N              Limit messages per channel
+#   --channel NAME/ID      Only archive specific channel (can repeat)
+#   --download-attachments Download images/files locally
 
 # Examples:
 python discord_archiver.py "your-token" 24 ./discord_archive
 python discord_archiver.py "your-token" 0  # Disable auto-update
+python discord_archiver.py "your-token" 24 ./archive --limit 100 --channel general
 python discord_archiver.py "your-token" 6 ./my_archive --include-bots
 ```
 
@@ -272,6 +302,9 @@ The main archiving bot that connects to Discord and fetches messages.
 - Incremental updates (only new messages)
 - Auto-update scheduling
 - Bot message filtering (`--include-bots` flag)
+- Message limit per channel (`--limit N` flag)
+- Channel filtering (`--channel NAME/ID` flag)
+- Local attachment download (`--download-attachments` flag)
 
 **Output:**
 ```
@@ -282,7 +315,9 @@ discord_archive/
     ├── channels.json          # Channel list
     └── channel_<id>/
         ├── messages.json      # Full message data
-        └── messages.txt       # Plain text backup
+        ├── messages.txt       # Plain text backup
+        └── attachments/       # Downloaded files (if --download-attachments)
+            └── <msgid>_<filename>
 ```
 
 ### 2. `html_generator.py`
@@ -353,9 +388,11 @@ Cross-platform CLI helper script for managing the entire workflow.
 **Features:**
 - Works on Windows, Linux, and macOS
 - Simplified command interface
+- Real-time progress display during archiving
 - Automatic dependency installation
 - Configuration management
 - Web server with auto-open browser
+- Supports all archiver options (`--include-bots`, `--limit`, `--channel`)
 
 ## Configuration
 

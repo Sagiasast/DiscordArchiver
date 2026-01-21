@@ -4,6 +4,9 @@ Discord Server Archiver Bot
 Archives Discord server messages with incremental updates
 - Optionally includes bot-authored messages (default: False)
 - Stores HUMAN member count (bots excluded) in server_info.json
+- Supports message limit per channel (--limit N)
+- Supports channel filtering (--channel NAME or --channel ID)
+- Supports downloading attachments locally (--download-attachments)
 """
 
 import discord
@@ -11,8 +14,10 @@ from discord.ext import commands, tasks
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 import logging
+import aiohttp
+import asyncio
 
 # Setup logging
 logging.basicConfig(
@@ -27,7 +32,10 @@ class DiscordArchiver(commands.Bot):
         self,
         archive_path: str = "./discord_archive",
         update_interval_hours: int = 24,
-        include_bots: bool = False
+        include_bots: bool = False,
+        message_limit: Optional[int] = None,
+        channel_filter: Optional[List[str]] = None,
+        download_attachments: bool = False
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -40,6 +48,10 @@ class DiscordArchiver(commands.Bot):
         self.archive_path.mkdir(parents=True, exist_ok=True)
         self.update_interval_hours = update_interval_hours
         self.include_bots = include_bots
+        self.message_limit = message_limit  # Max messages per channel (None = unlimited)
+        self.channel_filter = channel_filter  # List of channel names/IDs to archive (None = all)
+        self.download_attachments = download_attachments  # Download attachments locally
+        self._http_session: Optional[aiohttp.ClientSession] = None
 
         self.metadata_file = self.archive_path / "metadata.json"
         self.metadata = self.load_metadata()
@@ -152,6 +164,44 @@ class DiscordArchiver(commands.Bot):
 
         return removed
 
+    def should_archive_channel(self, channel: discord.TextChannel) -> bool:
+        """Check if channel should be archived based on filter"""
+        if not self.channel_filter:
+            return True  # No filter, archive all channels
+
+        # Check if channel name or ID matches any filter
+        for f in self.channel_filter:
+            # Match by name (case-insensitive)
+            if f.lower() == channel.name.lower():
+                return True
+            # Match by ID
+            if f.isdigit() and int(f) == channel.id:
+                return True
+        return False
+
+    async def get_http_session(self) -> aiohttp.ClientSession:
+        """Get or create HTTP session for downloading attachments"""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
+    async def download_attachment(self, url: str, save_path: Path) -> bool:
+        """Download an attachment from URL to local path"""
+        try:
+            session = await self.get_http_session()
+            async with session.get(url) as response:
+                if response.status == 200:
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(save_path, 'wb') as f:
+                        f.write(await response.read())
+                    return True
+                else:
+                    logger.warning(f"Failed to download {url}: HTTP {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error downloading {url}: {e}")
+            return False
+
     # ----------------------------
     # Discord events / tasks
     # ----------------------------
@@ -160,6 +210,11 @@ class DiscordArchiver(commands.Bot):
         logger.info(f'Logged in as {self.user.name} ({self.user.id})')
         logger.info(f'Archive path: {self.archive_path.absolute()}')
         logger.info(f'Include bot messages: {self.include_bots}')
+        logger.info(f'Download attachments: {self.download_attachments}')
+        if self.message_limit:
+            logger.info(f'Message limit per channel: {self.message_limit}')
+        if self.channel_filter:
+            logger.info(f'Channel filter: {", ".join(self.channel_filter)}')
 
         # Start automatic archiving if configured
         if self.update_interval_hours > 0:
@@ -204,9 +259,12 @@ class DiscordArchiver(commands.Bot):
         with open(server_path / 'server_info.json', 'w', encoding='utf-8') as f:
             json.dump(server_info, f, indent=2)
 
-        # Archive channels
+        # Archive channels (with optional filtering)
         channels_data = []
         for channel in guild.text_channels:
+            if not self.should_archive_channel(channel):
+                logger.info(f'Skipping channel: #{channel.name} (not in filter)')
+                continue
             try:
                 channel_data = await self.archive_channel(channel, server_path, incremental)
                 channels_data.append(channel_data)
@@ -250,9 +308,12 @@ class DiscordArchiver(commands.Bot):
         last_message_id = None
         new_message_count = 0
 
+        # Use message_limit if set, otherwise fetch all (None)
+        fetch_limit = self.message_limit
+
         try:
             async for message in channel.history(
-                limit=None,
+                limit=fetch_limit,
                 after=after_obj,
                 oldest_first=True
             ):
@@ -260,10 +321,15 @@ class DiscordArchiver(commands.Bot):
                 if message.author.bot and not self.include_bots:
                     continue
 
-                msg_data = await self.serialize_message(message)
+                msg_data = await self.serialize_message(message, channel_path)
                 new_messages.append(msg_data)
                 last_message_id = message.id
                 new_message_count += 1
+
+                # Check if we've hit the message limit (for non-bot messages)
+                if self.message_limit and new_message_count >= self.message_limit:
+                    logger.info(f'  Reached message limit ({self.message_limit}) for #{channel.name}')
+                    break
 
                 if new_message_count % 100 == 0:
                     logger.info(f'  Archived {new_message_count} new messages from #{channel.name}')
@@ -335,16 +401,35 @@ class DiscordArchiver(commands.Bot):
         logger.info(f'Channel archived: #{channel.name} ({new_message_count} new messages)')
         return channel_data
 
-    async def serialize_message(self, message: discord.Message) -> Dict:
+    async def serialize_message(self, message: discord.Message, channel_path: Optional[Path] = None) -> Dict:
         """Convert Discord message to JSON-serializable dict"""
         attachments = []
         for att in message.attachments:
-            attachments.append({
+            att_data = {
                 'filename': att.filename,
                 'url': att.url,
                 'size': att.size,
                 'content_type': att.content_type
-            })
+            }
+
+            # Download attachment if enabled
+            if self.download_attachments and channel_path:
+                attachments_dir = channel_path / "attachments"
+                # Use message_id + filename to avoid collisions
+                local_filename = f"{message.id}_{att.filename}"
+                local_path = attachments_dir / local_filename
+
+                # Only download if not already exists
+                if not local_path.exists():
+                    if await self.download_attachment(att.url, local_path):
+                        att_data['local_path'] = f"attachments/{local_filename}"
+                        logger.info(f"    Downloaded: {att.filename}")
+                    else:
+                        att_data['local_path'] = None  # Download failed
+                else:
+                    att_data['local_path'] = f"attachments/{local_filename}"
+
+            attachments.append(att_data)
 
         embeds = []
         for embed in message.embeds:
@@ -423,22 +508,54 @@ def main():
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [--include-bots]")
+        print("Usage: python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [options]")
         print("  BOT_TOKEN: Your Discord bot token")
         print("  update_interval_hours: Auto-update interval (default: 24, 0 to disable)")
         print("  archive_path: Path to store archives (default: ./discord_archive)")
-        print("  --include-bots: Include bot-authored messages in archive (default: False)")
+        print("Options:")
+        print("  --include-bots         Include bot-authored messages in archive (default: False)")
+        print("  --limit N              Limit messages per channel (default: unlimited)")
+        print("  --channel NAME/ID      Only archive specific channel(s) (can be repeated)")
+        print("  --download-attachments Download attachments locally (default: False)")
         sys.exit(1)
 
     token = sys.argv[1]
     update_interval = int(sys.argv[2]) if len(sys.argv) > 2 and not str(sys.argv[2]).startswith("--") else 24
     archive_path = sys.argv[3] if len(sys.argv) > 3 and not str(sys.argv[3]).startswith("--") else "./discord_archive"
     include_bots = "--include-bots" in sys.argv
+    download_attachments = "--download-attachments" in sys.argv
+
+    # Parse --limit N
+    message_limit = None
+    if "--limit" in sys.argv:
+        try:
+            limit_idx = sys.argv.index("--limit")
+            message_limit = int(sys.argv[limit_idx + 1])
+        except (IndexError, ValueError):
+            print("Error: --limit requires a number")
+            sys.exit(1)
+
+    # Parse --channel NAME/ID (can be repeated)
+    channel_filter = []
+    i = 0
+    while i < len(sys.argv):
+        if sys.argv[i] == "--channel":
+            try:
+                channel_filter.append(sys.argv[i + 1])
+                i += 2
+            except IndexError:
+                print("Error: --channel requires a channel name or ID")
+                sys.exit(1)
+        else:
+            i += 1
 
     bot = DiscordArchiver(
         archive_path=archive_path,
         update_interval_hours=update_interval,
-        include_bots=include_bots
+        include_bots=include_bots,
+        message_limit=message_limit,
+        channel_filter=channel_filter if channel_filter else None,
+        download_attachments=download_attachments
     )
     bot.run(token)
 

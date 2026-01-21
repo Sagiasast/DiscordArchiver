@@ -179,8 +179,37 @@ def _has_flag(flag: str) -> bool:
     return flag in sys.argv[2:]
 
 
+def _get_flag_value(flag: str) -> str:
+    """Get the value following a flag (e.g., --limit 100 returns '100')"""
+    args = sys.argv[2:]
+    if flag in args:
+        try:
+            idx = args.index(flag)
+            return args[idx + 1]
+        except IndexError:
+            return None
+    return None
+
+
+def _get_flag_values(flag: str) -> list:
+    """Get all values for a repeatable flag (e.g., --channel general --channel random)"""
+    args = sys.argv[2:]
+    values = []
+    i = 0
+    while i < len(args):
+        if args[i] == flag:
+            try:
+                values.append(args[i + 1])
+                i += 2
+            except IndexError:
+                i += 1
+        else:
+            i += 1
+    return values
+
+
 def cmd_start():
-    """Start archiver in background"""
+    """Start archiver in background with progress display"""
     print_header()
 
     token = get_env("DISCORD_BOT_TOKEN", "your_bot_token_here")
@@ -198,17 +227,37 @@ def cmd_start():
     interval = get_env("UPDATE_INTERVAL_HOURS", "24")
 
     include_bots = _has_flag("--include-bots")
+    message_limit = _get_flag_value("--limit")
+    channel_filter = _get_flag_values("--channel")
+    download_attachments = _has_flag("--download-attachments")
 
-    print_info("Starting Discord archiver in background...")
+    print_info("Starting Discord archiver...")
+    print_success(f"Include bots: {include_bots}")
+    if message_limit:
+        print_success(f"Message limit: {message_limit} per channel")
+    if channel_filter:
+        print_success(f"Channel filter: {', '.join(channel_filter)}")
+    if download_attachments:
+        print_success("Download attachments: enabled")
 
     archiver_script = SCRIPT_DIR / "discord_archiver.py"
 
-    cmd = [sys.executable, str(archiver_script), token, interval, archive_path]
+    cmd = [sys.executable, "-u", str(archiver_script), token, interval, archive_path]
     if include_bots:
         cmd.append("--include-bots")
+    if message_limit:
+        cmd.extend(["--limit", message_limit])
+    for channel in channel_filter:
+        cmd.extend(["--channel", channel])
+    if download_attachments:
+        cmd.append("--download-attachments")
+
+    # Clear log file and start process
+    with open(LOG_FILE, 'w') as log:
+        log.write("")
 
     if sys.platform == "win32":
-        with open(LOG_FILE, 'w') as log:
+        with open(LOG_FILE, 'a') as log:
             process = subprocess.Popen(
                 cmd,
                 stdout=log,
@@ -216,7 +265,7 @@ def cmd_start():
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
             )
     else:
-        with open(LOG_FILE, 'w') as log:
+        with open(LOG_FILE, 'a') as log:
             process = subprocess.Popen(
                 cmd,
                 stdout=log,
@@ -226,15 +275,92 @@ def cmd_start():
 
     PID_FILE.write_text(str(process.pid))
 
-    time.sleep(2)
+    time.sleep(1)
 
-    if is_archiver_running():
-        print_success(f"Archiver started (PID: {process.pid})")
-        print_success(f"Include bots: {include_bots}")
-        print_info(f"Logs: {LOG_FILE}")
-    else:
+    if not is_archiver_running():
         print_error("Archiver failed to start. Check archiver.log for details")
         sys.exit(1)
+
+    print_success(f"Archiver started (PID: {process.pid})")
+    console.print()
+
+    # Track progress state
+    archived_messages = 0
+    channels_done = 0
+    archive_complete = False
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TextColumn("[cyan]{task.fields[status]}"),
+        console=console,
+        transient=False
+    ) as progress:
+        main_task = progress.add_task(
+            "[cyan]Waiting for bot to connect...",
+            total=None,
+            status=""
+        )
+
+        # Monitor log file for progress
+        try:
+            with open(LOG_FILE, 'r') as log:
+                while is_archiver_running() and not archive_complete:
+                    line = log.readline()
+                    if not line:
+                        time.sleep(0.1)
+                        continue
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    parsed = parse_archiver_line(line)
+
+                    if parsed:
+                        if parsed['type'] == 'logged_in':
+                            progress.update(main_task, description="[cyan]Bot connected, waiting for archive...")
+
+                        elif parsed['type'] == 'server_start':
+                            progress.update(main_task, description=f"[cyan]Archiving: {parsed['name']}")
+
+                        elif parsed['type'] == 'channel_start':
+                            progress.update(main_task, status=f"#{parsed['name']}")
+
+                        elif parsed['type'] == 'progress':
+                            progress.update(main_task, status=f"#{parsed['channel']} [{parsed['count']:,} msgs]")
+
+                        elif parsed['type'] == 'channel_done':
+                            channels_done += 1
+                            archived_messages += parsed['count']
+                            progress.update(main_task, status=f"✓ #{parsed['name']} ({parsed['count']:,} msgs)")
+
+                        elif parsed['type'] == 'server_done':
+                            progress.update(
+                                main_task,
+                                description="[green]Archive complete!",
+                                status=f"{archived_messages:,} messages archived"
+                            )
+                            archive_complete = True
+
+                        elif parsed['type'] == 'archive_done':
+                            progress.update(
+                                main_task,
+                                description="[green]Archive complete!",
+                                status=f"{archived_messages:,} total messages"
+                            )
+                            archive_complete = True
+
+        except KeyboardInterrupt:
+            console.print()
+            print_info("Progress display stopped (archiver continues in background)")
+
+    console.print()
+    if archive_complete:
+        print_success(f"Initial archive complete: {archived_messages:,} messages from {channels_done} channels")
+    print_info(f"Archiver running in background (PID: {process.pid})")
+    print_info(f"Next auto-update in {interval} hours")
+    print_info(f"Use 'python run.py stop' to stop the archiver")
 
 
 def cmd_stop():
@@ -260,8 +386,65 @@ def cmd_stop():
     print_success("Archiver stopped")
 
 
+def load_metadata(archive_path=None):
+    """Load metadata.json to get total message counts"""
+    import json
+    if archive_path is None:
+        archive_path = Path(get_env("ARCHIVE_PATH", str(DEFAULT_ARCHIVE_PATH)))
+    else:
+        archive_path = Path(archive_path)
+    metadata_file = archive_path / "metadata.json"
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print_warning(f"Could not load metadata: {e}")
+    return None
+
+
+def parse_archiver_line(line):
+    """Parse archiver log line to extract progress info"""
+    import re
+
+    # Match: "Archiving server: ServerName (ID: 123)"
+    server_match = re.search(r'Archiving server: (.+?) \(ID:', line)
+    if server_match:
+        return {'type': 'server_start', 'name': server_match.group(1)}
+
+    # Match: "Archiving channel: #channelname"
+    channel_start = re.search(r'Archiving channel: #(.+)$', line)
+    if channel_start:
+        return {'type': 'channel_start', 'name': channel_start.group(1)}
+
+    # Match: "Archived 100 new messages from #channelname"
+    progress_match = re.search(r'Archived (\d+) new messages from #(.+)$', line)
+    if progress_match:
+        return {'type': 'progress', 'count': int(progress_match.group(1)), 'channel': progress_match.group(2)}
+
+    # Match: "Channel archived: #channelname (123 new messages)"
+    channel_done = re.search(r'Channel archived: #(.+?) \((\d+) new messages\)', line)
+    if channel_done:
+        return {'type': 'channel_done', 'name': channel_done.group(1), 'count': int(channel_done.group(2))}
+
+    # Match: "Server archive completed: ServerName"
+    server_done = re.search(r'Server archive completed: (.+)$', line)
+    if server_done:
+        return {'type': 'server_done', 'name': server_done.group(1)}
+
+    # Match: "Automatic archive update completed"
+    if 'archive update completed' in line.lower():
+        return {'type': 'archive_done'}
+
+    # Match: "Logged in as BotName"
+    if 'Logged in as' in line:
+        return {'type': 'logged_in'}
+
+    return None
+
+
 def cmd_archive():
-    """Run archiver in foreground (blocking)"""
+    """Run archiver in foreground (blocking) with progress display"""
     print_header()
 
     token = get_env("DISCORD_BOT_TOKEN", "your_bot_token_here")
@@ -277,12 +460,146 @@ def cmd_archive():
     print_info("Starting Discord archiver (press Ctrl+C to stop)...")
     print_success(f"Include bots: {include_bots}")
 
+    # Load metadata for progress calculation
+    metadata = load_metadata()
+    total_messages = 0
+    channel_messages = {}
+
+    if metadata and 'channels' in metadata:
+        for ch_data in metadata['channels'].values():
+            count = ch_data.get('message_count', 0)
+            name = ch_data.get('name', '')
+            total_messages += count
+            channel_messages[name] = count
+        print_info(f"Previous archive: {total_messages:,} messages across {len(channel_messages)} channels")
+
     archiver_script = SCRIPT_DIR / "discord_archiver.py"
-    cmd = [sys.executable, str(archiver_script), token, interval, archive_path]
+    cmd = [sys.executable, "-u", str(archiver_script), token, interval, archive_path]
     if include_bots:
         cmd.append("--include-bots")
 
-    subprocess.run(cmd)
+    console.print()
+
+    # Run with real-time progress tracking
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+
+    # Track progress state
+    current_channel = None
+    current_channel_messages = 0
+    archived_messages = 0
+    channels_done = 0
+    total_channels = len(channel_messages) if channel_messages else 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=30),
+        TaskProgressColumn(),
+        TextColumn("[cyan]{task.fields[status]}"),
+        console=console,
+        transient=False
+    ) as progress:
+        # Main progress task
+        main_task = progress.add_task(
+            "[cyan]Waiting for bot to connect...",
+            total=100,
+            status=""
+        )
+
+        try:
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+
+                parsed = parse_archiver_line(line)
+
+                if parsed:
+                    if parsed['type'] == 'logged_in':
+                        progress.update(main_task, description="[cyan]Bot connected, waiting for archive...")
+
+                    elif parsed['type'] == 'server_start':
+                        progress.update(main_task, description=f"[cyan]Archiving: {parsed['name']}")
+
+                    elif parsed['type'] == 'channel_start':
+                        current_channel = parsed['name']
+                        current_channel_messages = 0
+                        expected = channel_messages.get(current_channel, 0)
+                        status = f"#{current_channel}"
+                        if expected > 0:
+                            status += f" (~{expected:,} msgs)"
+                        progress.update(main_task, status=status)
+
+                    elif parsed['type'] == 'progress':
+                        current_channel_messages = parsed['count']
+                        expected = channel_messages.get(parsed['channel'], 0)
+
+                        # Update progress percentage
+                        if total_messages > 0:
+                            # Calculate based on completed channels + current channel progress
+                            completed_msgs = archived_messages
+                            if expected > 0:
+                                channel_pct = min(current_channel_messages / expected, 1.0)
+                                completed_msgs += int(expected * channel_pct)
+                            else:
+                                completed_msgs += current_channel_messages
+
+                            pct = min((completed_msgs / total_messages) * 100, 100)
+                            progress.update(main_task, completed=pct)
+
+                        status = f"#{parsed['channel']} [{current_channel_messages:,}"
+                        if expected > 0:
+                            status += f"/{expected:,}"
+                        status += " msgs]"
+                        progress.update(main_task, status=status)
+
+                    elif parsed['type'] == 'channel_done':
+                        channels_done += 1
+                        archived_messages += parsed['count']
+
+                        if total_messages > 0:
+                            pct = min((archived_messages / total_messages) * 100, 100)
+                            progress.update(main_task, completed=pct)
+                        elif total_channels > 0:
+                            pct = (channels_done / total_channels) * 100
+                            progress.update(main_task, completed=pct)
+
+                        status = f"✓ #{parsed['name']} ({parsed['count']:,} msgs)"
+                        progress.update(main_task, status=status)
+
+                    elif parsed['type'] == 'server_done':
+                        progress.update(
+                            main_task,
+                            completed=100,
+                            description="[green]Archive complete!",
+                            status=f"{archived_messages:,} messages archived"
+                        )
+
+                    elif parsed['type'] == 'archive_done':
+                        progress.update(
+                            main_task,
+                            completed=100,
+                            description="[green]Archive complete!",
+                            status=f"{archived_messages:,} total messages"
+                        )
+
+            process.wait()
+
+        except KeyboardInterrupt:
+            process.terminate()
+            process.wait()
+            console.print()
+            print_info("Archiver stopped by user")
+            return
+
+    console.print()
+    print_success(f"Archiving complete: {archived_messages:,} messages from {channels_done} channels")
 
 
 def cmd_generate():
@@ -303,21 +620,9 @@ def cmd_generate():
         print_info("Make sure the archiver has run and archived at least one server")
         sys.exit(1)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console
-    ) as progress:
-        task = progress.add_task("[cyan]Generating HTML from archive...", total=100)
-        progress.update(task, advance=10)
-        
-        generator_script = SCRIPT_DIR / "html_generator.py"
-        subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
-        
-        progress.update(task, advance=90)
-
+    print_info("Generating HTML from archive...")
+    generator_script = SCRIPT_DIR / "html_generator.py"
+    subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
     print_success(f"HTML generated: {output_path}")
 
 
@@ -373,27 +678,9 @@ def cmd_view(port=None):
         print_error(f"Archive directory not found: {archive_path}")
         sys.exit(1)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console
-    ) as progress:
-        # Step 1: Generate HTML
-        gen_task = progress.add_task("[cyan][1/2] Generating HTML...", total=100)
-        progress.update(gen_task, advance=10)
-        
-        generator_script = SCRIPT_DIR / "html_generator.py"
-        subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
-        
-        progress.update(gen_task, advance=90)
-        progress.update(gen_task, description="[green][1/2] HTML generated ✓")
-        
-        # Step 2: Prepare server
-        server_task = progress.add_task("[cyan][2/2] Preparing server...", total=100)
-        progress.update(server_task, advance=100)
-
+    print_info("Generating HTML from archive...")
+    generator_script = SCRIPT_DIR / "html_generator.py"
+    subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
     print_success(f"HTML generated: {output_path}")
     console.print()
 
@@ -489,18 +776,21 @@ def cmd_help():
     console.print("  status             Show current status of archiver and files")
     console.print()
     console.print("[cyan]Archiver Commands:[/cyan]")
-    console.print("  start [--include-bots]    Start archiver in background (keeps running)")
-    console.print("  stop                      Stop background archiver")
-    console.print("  archive [--include-bots]  Run archiver in foreground (Ctrl+C to stop)")
-    console.print("  logs                      Show archiver logs")
+    console.print("  start [options]    Start archiver in background (keeps running)")
+    console.print("  stop               Stop background archiver")
+    console.print("  archive [options]  Run archiver in foreground (Ctrl+C to stop)")
+    console.print("  logs               Show archiver logs")
     console.print()
     console.print("[cyan]HTML Commands:[/cyan]")
     console.print("  generate           Generate HTML from archive")
     console.print("  serve [port]       Start local web server (default: 8000)")
     console.print("  view [port]        Generate new HTML and start server")
     console.print()
-    console.print("[cyan]Flags:[/cyan]")
-    console.print("  --include-bots     Include bot-authored messages in the archive (default: off)")
+    console.print("[cyan]Archiver Options:[/cyan]")
+    console.print("  --include-bots        Include bot-authored messages (default: off)")
+    console.print("  --limit N             Limit messages per channel (default: unlimited)")
+    console.print("  --channel NAME/ID     Only archive specific channel (can repeat)")
+    console.print("  --download-attachments  Download images/files locally (default: off)")
     console.print()
     console.print("[blue]USAGE:[/blue]")
     console.print("[blue]1)[/blue] python run.py setup[green]   First time - creates .env[/green]")
