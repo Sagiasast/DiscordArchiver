@@ -35,7 +35,8 @@ class DiscordArchiver(commands.Bot):
         include_bots: bool = False,
         message_limit: Optional[int] = None,
         channel_filter: Optional[List[str]] = None,
-        download_attachments: bool = False
+        download_attachments: bool = False,
+        api_delay: float = 0.0
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -52,6 +53,7 @@ class DiscordArchiver(commands.Bot):
         self.channel_filter = channel_filter  # List of channel names/IDs to archive (None = all)
         self.download_attachments = download_attachments  # Download attachments locally
         self._http_session: Optional[aiohttp.ClientSession] = None
+        self.api_delay: float = api_delay  # Delay between API calls (seconds)
 
         self.metadata_file = self.archive_path / "metadata.json"
         self.metadata = self.load_metadata()
@@ -185,22 +187,46 @@ class DiscordArchiver(commands.Bot):
             self._http_session = aiohttp.ClientSession()
         return self._http_session
 
-    async def download_attachment(self, url: str, save_path: Path) -> bool:
-        """Download an attachment from URL to local path"""
-        try:
-            session = await self.get_http_session()
-            async with session.get(url) as response:
-                if response.status == 200:
-                    save_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(save_path, 'wb') as f:
-                        f.write(await response.read())
-                    return True
-                else:
-                    logger.warning(f"Failed to download {url}: HTTP {response.status}")
-                    return False
-        except Exception as e:
-            logger.error(f"Error downloading {url}: {e}")
-            return False
+    async def download_attachment(self, url: str, save_path: Path, max_retries: int = 3) -> bool:
+        """Download an attachment from URL to local path with retry logic"""
+        session = await self.get_http_session()
+
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        save_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(save_path, 'wb') as f:
+                            f.write(await response.read())
+                        # Small delay between downloads to avoid CDN rate limits
+                        await asyncio.sleep(0.1)
+                        return True
+                    elif response.status == 429:
+                        # Rate limited - wait and retry
+                        retry_after = float(response.headers.get('Retry-After', 1.0))
+                        logger.warning(f"CDN rate limited, waiting {retry_after}s...")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    else:
+                        logger.warning(f"Failed to download {url}: HTTP {response.status}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+                        return False
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout downloading {url} (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                return False
+            except Exception as e:
+                logger.error(f"Error downloading {url}: {e} (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                return False
+
+        return False
 
     # ----------------------------
     # Discord events / tasks
@@ -215,6 +241,8 @@ class DiscordArchiver(commands.Bot):
             logger.info(f'Message limit per channel: {self.message_limit}')
         if self.channel_filter:
             logger.info(f'Channel filter: {", ".join(self.channel_filter)}')
+        if self.api_delay > 0:
+            logger.info(f'API delay: {self.api_delay}s between requests')
 
         # Start automatic archiving if configured
         if self.update_interval_hours > 0:
@@ -333,6 +361,9 @@ class DiscordArchiver(commands.Bot):
 
                 if new_message_count % 100 == 0:
                     logger.info(f'  Archived {new_message_count} new messages from #{channel.name}')
+                    # Apply API delay every 100 messages to avoid rate limits
+                    if self.api_delay > 0:
+                        await asyncio.sleep(self.api_delay)
 
         except discord.Forbidden:
             logger.warning(f'No permission to read channel: #{channel.name}')
@@ -517,6 +548,7 @@ def main():
         print("  --limit N              Limit messages per channel (default: unlimited)")
         print("  --channel NAME/ID      Only archive specific channel(s) (can be repeated)")
         print("  --download-attachments Download attachments locally (default: False)")
+        print("  --delay N              Delay in seconds between API batches (default: 0)")
         sys.exit(1)
 
     token = sys.argv[1]
@@ -549,13 +581,24 @@ def main():
         else:
             i += 1
 
+    # Parse --delay N
+    api_delay = 0.0
+    if "--delay" in sys.argv:
+        try:
+            delay_idx = sys.argv.index("--delay")
+            api_delay = float(sys.argv[delay_idx + 1])
+        except (IndexError, ValueError):
+            print("Error: --delay requires a number (seconds)")
+            sys.exit(1)
+
     bot = DiscordArchiver(
         archive_path=archive_path,
         update_interval_hours=update_interval,
         include_bots=include_bots,
         message_limit=message_limit,
         channel_filter=channel_filter if channel_filter else None,
-        download_attachments=download_attachments
+        download_attachments=download_attachments,
+        api_delay=api_delay
     )
     bot.run(token)
 

@@ -149,6 +149,7 @@ python run.py logs               # Show archiver logs
 | `--limit N` | Limit messages per channel (default: unlimited) |
 | `--channel NAME/ID` | Only archive specific channel (can repeat) |
 | `--download-attachments` | Download images/files locally (default: off) |
+| `--delay N` | Delay N seconds between API batches to avoid rate limits |
 
 **Examples:**
 ```bash
@@ -164,8 +165,11 @@ python run.py start --channel general --channel announcements
 # Download all attachments (images, files) locally
 python run.py start --download-attachments
 
+# Avoid rate limits with delay (recommended for large archives)
+python run.py start --delay 1
+
 # Combine options
-python run.py start --limit 500 --channel general --include-bots --download-attachments
+python run.py start --limit 500 --channel general --include-bots --download-attachments --delay 0.5
 ```
 
 #### HTML Commands
@@ -196,6 +200,7 @@ python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [o
 #   --limit N              Limit messages per channel
 #   --channel NAME/ID      Only archive specific channel (can repeat)
 #   --download-attachments Download images/files locally
+#   --delay N              Delay N seconds between API batches
 
 # Examples:
 python discord_archiver.py "your-token" 24 ./discord_archive
@@ -304,7 +309,8 @@ The main archiving bot that connects to Discord and fetches messages.
 - Bot message filtering (`--include-bots` flag)
 - Message limit per channel (`--limit N` flag)
 - Channel filtering (`--channel NAME/ID` flag)
-- Local attachment download (`--download-attachments` flag)
+- Local attachment download with retry logic (`--download-attachments` flag)
+- Rate limit prevention (`--delay N` flag)
 
 **Output:**
 ```

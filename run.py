@@ -230,6 +230,7 @@ def cmd_start():
     message_limit = _get_flag_value("--limit")
     channel_filter = _get_flag_values("--channel")
     download_attachments = _has_flag("--download-attachments")
+    api_delay = _get_flag_value("--delay")
 
     print_info("Starting Discord archiver...")
     print_success(f"Include bots: {include_bots}")
@@ -239,6 +240,8 @@ def cmd_start():
         print_success(f"Channel filter: {', '.join(channel_filter)}")
     if download_attachments:
         print_success("Download attachments: enabled")
+    if api_delay:
+        print_success(f"API delay: {api_delay}s between batches")
 
     archiver_script = SCRIPT_DIR / "discord_archiver.py"
 
@@ -251,6 +254,8 @@ def cmd_start():
         cmd.extend(["--channel", channel])
     if download_attachments:
         cmd.append("--download-attachments")
+    if api_delay:
+        cmd.extend(["--delay", api_delay])
 
     # Clear log file and start process
     with open(LOG_FILE, 'w') as log:
@@ -787,10 +792,11 @@ def cmd_help():
     console.print("  view [port]        Generate new HTML and start server")
     console.print()
     console.print("[cyan]Archiver Options:[/cyan]")
-    console.print("  --include-bots        Include bot-authored messages (default: off)")
-    console.print("  --limit N             Limit messages per channel (default: unlimited)")
-    console.print("  --channel NAME/ID     Only archive specific channel (can repeat)")
+    console.print("  --include-bots          Include bot-authored messages (default: off)")
+    console.print("  --limit N               Limit messages per channel (default: unlimited)")
+    console.print("  --channel NAME/ID       Only archive specific channel (can repeat)")
     console.print("  --download-attachments  Download images/files locally (default: off)")
+    console.print("  --delay N               Delay N seconds between API batches (default: 0)")
     console.print()
     console.print("[blue]USAGE:[/blue]")
     console.print("[blue]1)[/blue] python run.py setup[green]   First time - creates .env[/green]")
