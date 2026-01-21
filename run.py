@@ -14,6 +14,10 @@ import signal
 from pathlib import Path
 import webbrowser
 import time
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.panel import Panel
+from rich.text import Text
 
 # Configuration
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -24,45 +28,33 @@ PID_FILE = SCRIPT_DIR / ".archiver.pid"
 LOG_FILE = SCRIPT_DIR / "archiver.log"
 ENV_FILE = SCRIPT_DIR / ".env"
 
-# Colors 
-class Colors:
-    if sys.platform == "win32":
-        os.system("") 
+# Initialize rich console
+console = Console()
 
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[94m"
-    CYAN = "\033[96m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-
-
+# Helper functions using rich
 def print_header():
-    print(f"{Colors.BLUE}================================{Colors.RESET}")
-    print(f"{Colors.BLUE}  Discord Server Archiver{Colors.RESET}")
-    print(f"{Colors.BLUE}================================{Colors.RESET}")
-    print()
+    console.print(Panel.fit("[bold blue]Discord Server Archiver[/bold blue]", border_style="blue"))
+    console.print()
 
 
 def print_success(msg):
-    print(f"{Colors.GREEN}✓{Colors.RESET} {msg}")
+    console.print(f"[green]✓[/green] {msg}")
 
 
 def print_error(msg):
-    print(f"{Colors.RED}✗{Colors.RESET} {msg}")
+    console.print(f"[red]✗[/red] {msg}")
 
 
 def print_warning(msg):
-    print(f"{Colors.YELLOW}!{Colors.RESET} {msg}")
+    console.print(f"[yellow]![/yellow] {msg}")
 
 
 def print_info(msg):
-    print(f"{Colors.BLUE}→{Colors.RESET} {msg}")
+    console.print(f"[blue]→[/blue] {msg}")
 
 
 def print_step(step, msg):
-    print(f"{Colors.CYAN}[{step}]{Colors.RESET} {msg}")
+    console.print(f"[cyan][{step}][/cyan] {msg}")
 
 
 def load_env():
@@ -97,17 +89,28 @@ def cmd_setup():
     version = sys.version_info
     print_success(f"Python {version.major}.{version.minor}.{version.micro} found")
 
-    # Install dependencies
-    print_info("Installing dependencies...")
+    # Install dependencies with progress
     req_file = SCRIPT_DIR / "requirements.txt"
 
-    if req_file.exists():
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q"])
-        print_success("Dependencies installed")
-    else:
-        print_warning("requirements.txt not found, installing discord.py...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "discord.py", "-q"])
-        print_success("discord.py installed")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        if req_file.exists():
+            task = progress.add_task("[cyan]Installing dependencies...", total=100)
+            progress.update(task, advance=20)
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req_file), "-q"])
+            progress.update(task, advance=80)
+            print_success("Dependencies installed")
+        else:
+            task = progress.add_task("[cyan]Installing discord.py...", total=100)
+            progress.update(task, advance=20)
+            subprocess.run([sys.executable, "-m", "pip", "install", "discord.py", "rich", "-q"])
+            progress.update(task, advance=80)
+            print_success("discord.py and rich installed")
 
     # Create .env file
     print_info("Setting up environment...")
@@ -300,10 +303,20 @@ def cmd_generate():
         print_info("Make sure the archiver has run and archived at least one server")
         sys.exit(1)
 
-    print_info("Generating HTML from archive...")
-
-    generator_script = SCRIPT_DIR / "html_generator.py"
-    subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Generating HTML from archive...", total=100)
+        progress.update(task, advance=10)
+        
+        generator_script = SCRIPT_DIR / "html_generator.py"
+        subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
+        
+        progress.update(task, advance=90)
 
     print_success(f"HTML generated: {output_path}")
 
@@ -332,9 +345,9 @@ def cmd_serve(port=None):
     url = f"http://localhost:{port}/{server_id}/index.html"
 
     print_info(f"Starting web server on port {port}...")
-    print_success(f"Opening {Colors.GREEN}{url}{Colors.RESET}")
+    print_success(f"Opening [green]{url}[/green]")
     print_warning("Press Ctrl+C to stop")
-    print()
+    console.print()
 
     os.chdir(output_path)
 
@@ -353,8 +366,6 @@ def cmd_view(port=None):
     """Generate HTML and start server with browser"""
     print_header()
 
-    print_step("1/2", "Generating HTML...")
-
     archive_path = Path(get_env("ARCHIVE_PATH", str(DEFAULT_ARCHIVE_PATH)))
     output_path = Path(get_env("HTML_OUTPUT_PATH", str(DEFAULT_HTML_PATH)))
 
@@ -362,12 +373,29 @@ def cmd_view(port=None):
         print_error(f"Archive directory not found: {archive_path}")
         sys.exit(1)
 
-    generator_script = SCRIPT_DIR / "html_generator.py"
-    subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console
+    ) as progress:
+        # Step 1: Generate HTML
+        gen_task = progress.add_task("[cyan][1/2] Generating HTML...", total=100)
+        progress.update(gen_task, advance=10)
+        
+        generator_script = SCRIPT_DIR / "html_generator.py"
+        subprocess.run([sys.executable, str(generator_script), str(archive_path), str(output_path)])
+        
+        progress.update(gen_task, advance=90)
+        progress.update(gen_task, description="[green][1/2] HTML generated ✓")
+        
+        # Step 2: Prepare server
+        server_task = progress.add_task("[cyan][2/2] Preparing server...", total=100)
+        progress.update(server_task, advance=100)
 
     print_success(f"HTML generated: {output_path}")
-    print()
-    print_step("2/2", "Starting server...")
+    console.print()
 
     if port is None:
         port = int(get_env("SERVER_PORT", DEFAULT_PORT))
@@ -383,9 +411,9 @@ def cmd_view(port=None):
     url = f"http://localhost:{port}/{server_id}/index.html"
 
     print_info(f"Starting web server on port {port}...")
-    print_success(f"Opening {Colors.GREEN}{url}{Colors.RESET}")
+    print_success(f"Opening [green]{url}[/green]")
     print_warning("Press Ctrl+C to stop")
-    print()
+    console.print()
 
     os.chdir(output_path)
 
@@ -456,29 +484,29 @@ def cmd_help():
     print_header()
     print("Usage: python run.py <command> [options]")
     print()
-    print(f"{Colors.CYAN}Setup Commands:{Colors.RESET}")
-    print("  setup              Install dependencies and create .env file")
-    print("  status             Show current status of archiver and files")
-    print()
-    print(f"{Colors.CYAN}Archiver Commands:{Colors.RESET}")
-    print("  start [--include-bots]    Start archiver in background (keeps running)")
-    print("  stop                      Stop background archiver")
-    print("  archive [--include-bots]  Run archiver in foreground (Ctrl+C to stop)")
-    print("  logs                      Show archiver logs")
-    print()
-    print(f"{Colors.CYAN}HTML Commands:{Colors.RESET}")
-    print("  generate           Generate HTML from archive")
-    print("  serve [port]       Start local web server (default: 8000)")
-    print("  view [port]        Generate new HTML and start server")
-    print()
-    print(f"{Colors.CYAN}Flags:{Colors.RESET}")
-    print("  --include-bots     Include bot-authored messages in the archive (default: off)")
-    print()
-    print(f"{Colors.BLUE}USAGE:{Colors.RESET}")
-    print(f"{Colors.BLUE}1){Colors.RESET} python run.py setup{Colors.GREEN}   First time - creates .env{Colors.RESET}")
-    print(f"{Colors.BLUE}2){Colors.RESET} python run.py start{Colors.GREEN}   Start archiver in background{Colors.RESET}")
-    print(f"{Colors.BLUE}3){Colors.RESET} python run.py view{Colors.GREEN}    Generate HTML and open viewer{Colors.RESET}")
-    print()
+    console.print("[cyan]Setup Commands:[/cyan]")
+    console.print("  setup              Install dependencies and create .env file")
+    console.print("  status             Show current status of archiver and files")
+    console.print()
+    console.print("[cyan]Archiver Commands:[/cyan]")
+    console.print("  start [--include-bots]    Start archiver in background (keeps running)")
+    console.print("  stop                      Stop background archiver")
+    console.print("  archive [--include-bots]  Run archiver in foreground (Ctrl+C to stop)")
+    console.print("  logs                      Show archiver logs")
+    console.print()
+    console.print("[cyan]HTML Commands:[/cyan]")
+    console.print("  generate           Generate HTML from archive")
+    console.print("  serve [port]       Start local web server (default: 8000)")
+    console.print("  view [port]        Generate new HTML and start server")
+    console.print()
+    console.print("[cyan]Flags:[/cyan]")
+    console.print("  --include-bots     Include bot-authored messages in the archive (default: off)")
+    console.print()
+    console.print("[blue]USAGE:[/blue]")
+    console.print("[blue]1)[/blue] python run.py setup[green]   First time - creates .env[/green]")
+    console.print("[blue]2)[/blue] python run.py start[green]   Start archiver in background[/green]")
+    console.print("[blue]3)[/blue] python run.py view[green]    Generate HTML and open viewer[/green]")
+    console.print()
 
 
 def main():
@@ -510,7 +538,7 @@ def main():
         try:
             commands[command]()
         except KeyboardInterrupt:
-            print("\n")
+            console.print("\n")
             print_info("Interrupted by user")
     else:
         print_error(f"Unknown command: {command}")

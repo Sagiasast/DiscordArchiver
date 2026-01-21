@@ -3,6 +3,7 @@
 
 # Discord bot library 
 discord.py>=2.0.0
+rich
 
 # No other dependencies needed - everything else uses Python standard library:
 # - json 
