@@ -1,14 +1,12 @@
-// Discord Archive Scripts - Enhanced Search
-
 // ============================================
 // Search State & Cache
 // ============================================
 const SearchEngine = {
   manifest: null,
-  loadedChunks: new Map(), // chunk_num -> data
+  loadedChunks: new Map(),
   isLoading: false,
   currentResults: [],
-  
+
   // Initialize search engine
   async init() {
     try {
@@ -16,7 +14,6 @@ const SearchEngine = {
       if (!response.ok) throw new Error('Manifest not found');
       this.manifest = await response.json();
       console.log(`Search index loaded: ${this.manifest.totalMessages} messages in ${this.manifest.totalChunks} chunks`);
-      this.populateAuthorSuggestions();
       this.populateChannelFilter();
       return true;
     } catch (err) {
@@ -76,7 +73,7 @@ const SearchEngine = {
     // Load and search through all chunks
     for (let i = 0; i < this.manifest.totalChunks; i++) {
       const chunk = await this.loadChunk(i);
-      
+
       for (const msg of chunk) {
         // Apply filters
         if (authorFilter && !msg.a.toLowerCase().includes(authorFilter)) {
@@ -123,26 +120,13 @@ const SearchEngine = {
     return results;
   },
 
-  // Populate author suggestions datalist
-  populateAuthorSuggestions() {
-    const datalist = document.getElementById('author-suggestions');
-    if (!datalist || !this.manifest) return;
-
-    datalist.innerHTML = '';
-    for (const author of this.manifest.authors.slice(0, 100)) {
-      const option = document.createElement('option');
-      option.value = author;
-      datalist.appendChild(option);
-    }
-  },
-
   // Populate channel filter dropdown
   populateChannelFilter() {
     const select = document.getElementById('search-channel');
     if (!select || !this.manifest) return;
 
     select.innerHTML = '<option value="">All Channels</option>';
-    
+
     // Group by category
     const categories = {};
     for (const [id, info] of Object.entries(this.manifest.channels)) {
@@ -154,14 +138,14 @@ const SearchEngine = {
     for (const [category, channels] of Object.entries(categories).sort()) {
       const optgroup = document.createElement('optgroup');
       optgroup.label = category;
-      
+
       for (const ch of channels.sort((a, b) => a.name.localeCompare(b.name))) {
         const option = document.createElement('option');
         option.value = ch.id;
         option.textContent = `#${ch.name}`;
         optgroup.appendChild(option);
       }
-      
+
       select.appendChild(optgroup);
     }
   },
@@ -173,6 +157,202 @@ const SearchEngine = {
 };
 
 // ============================================
+// Author Autocomplete (Select-like + dropdown)
+// ============================================
+const AuthorAutocomplete = {
+  input: null,
+  dropdown: null,
+  btn: null,
+  activeIndex: -1,
+  matches: [],
+  maxItems: 50,      // allow more when dropdown is opened
+  showAllOnToggle: false,
+
+  init() {
+    this.input = document.getElementById('search-author');
+    this.dropdown = document.getElementById('author-dropdown');
+    this.btn = document.getElementById('author-dropdown-btn');
+
+    if (!this.input || !this.dropdown || !this.btn) return;
+
+    this.input.addEventListener('input', () => {
+      this.showAllOnToggle = false;
+      this.onInput();
+    });
+
+    this.input.addEventListener('focus', () => {
+      // show filtered list on focus (if value exists) else show all
+      this.showAllOnToggle = !(this.input.value || '').trim();
+      this.onInput();
+    });
+
+    this.input.addEventListener('keydown', (e) => this.onKeyDown(e));
+
+    this.btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Toggle dropdown like a select
+      if (this.dropdown.style.display === 'block') {
+        this.hide();
+        return;
+      }
+
+      this.showAllOnToggle = true; // show all authors when arrow clicked
+      this.onInput(true);
+      this.input.focus();
+    });
+
+    // Close when clicking outside the author area
+    document.addEventListener('click', (e) => {
+      const wrap = this.input.closest('.author-autocomplete');
+      if (!wrap) return;
+      if (!wrap.contains(e.target)) this.hide();
+    });
+  },
+
+  onInput(forceShowAll = false) {
+    if (!SearchEngine.manifest) return;
+
+    const authors = SearchEngine.manifest.authors || [];
+    const raw = (this.input.value || '');
+    const q = raw.toLowerCase().trim();
+
+    let out = [];
+
+    // Show all when toggled, or when forced, or when input empty + focused
+    const showAll = forceShowAll || this.showAllOnToggle;
+
+    if (showAll || !q) {
+      out = authors.slice(0, this.maxItems);
+    } else {
+      // Prefer prefix matches first, then contains matches
+      const prefix = [];
+      const contains = [];
+
+      for (const a of authors) {
+        const low = a.toLowerCase();
+        if (low.startsWith(q)) prefix.push(a);
+        else if (low.includes(q)) contains.push(a);
+      }
+
+      out = [...prefix, ...contains].slice(0, this.maxItems);
+    }
+
+    this.matches = out;
+    this.activeIndex = -1;
+
+    if (out.length === 0) {
+      this.hide();
+      return;
+    }
+
+    this.render(out, q);
+    this.show();
+  },
+
+  render(items, queryLower) {
+    this.dropdown.innerHTML = items
+      .map((name, idx) => {
+        // simple highlight inside author name
+        let safe = escapeHtml(name);
+        if (queryLower) {
+          const re = new RegExp(`(${escapeRegExp(queryLower)})`, 'ig');
+          safe = safe.replace(re, '<span class="search-result-highlight">$1</span>');
+        }
+
+        return `
+          <div class="author-option" data-idx="${idx}">
+            <span class="author-name">${safe}</span>
+          </div>
+        `;
+      })
+      .join('');
+
+    this.dropdown.querySelectorAll('.author-option').forEach((opt) => {
+      opt.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // avoid blur
+        const idx = Number(opt.dataset.idx);
+        this.select(idx);
+      });
+    });
+  },
+
+  onKeyDown(e) {
+    if (this.dropdown.style.display === 'none') return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      this.activeIndex = Math.min(this.activeIndex + 1, this.matches.length - 1);
+      this.updateActive();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      this.activeIndex = Math.max(this.activeIndex - 1, 0);
+      this.updateActive();
+    } else if (e.key === 'Enter') {
+      if (this.activeIndex >= 0) {
+        e.preventDefault();
+        this.select(this.activeIndex);
+      }
+    } else if (e.key === 'Escape') {
+      this.hide();
+    }
+  },
+
+  updateActive() {
+    const opts = Array.from(this.dropdown.querySelectorAll('.author-option'));
+    opts.forEach((o) => o.classList.remove('active'));
+    const active = opts[this.activeIndex];
+    if (active) {
+      active.classList.add('active');
+      active.scrollIntoView({ block: 'nearest' });
+    }
+  },
+
+  select(idx) {
+    const val = this.matches[idx];
+    if (!val) return;
+    this.input.value = val;
+    this.hide();
+  },
+
+  show() {
+    this.dropdown.style.display = 'block';
+  },
+
+  hide() {
+    if (!this.dropdown) return;
+    this.dropdown.style.display = 'none';
+    this.activeIndex = -1;
+    this.showAllOnToggle = false;
+  }
+};
+
+// // ============================================
+// // Click on @mentions to search that author
+// // ============================================
+// document.addEventListener('click', function (e) {
+//   const mention = e.target.closest('.mention-user');
+//   if (!mention) return;
+
+//   const name = mention.dataset.mentionName;
+//   if (!name) return;
+
+//   // If we're on a channel page, filter that page by the mention text
+//   const searchInput = document.getElementById('search-input');
+//   if (searchInput) {
+//     searchInput.value = name;
+//     quickSearchPage(name.toLowerCase());
+//     return;
+//   }
+
+//   // Otherwise open the modal and prefill author
+//   showSearchModal();
+//   const authorInput = document.getElementById('search-author');
+//   if (authorInput) authorInput.value = name;
+// });
+
+// ============================================
 // Search Modal Functions
 // ============================================
 function showSearchModal() {
@@ -180,7 +360,7 @@ function showSearchModal() {
   if (modal) {
     modal.style.display = 'block';
     document.getElementById('search-text')?.focus();
-    
+
     // Initialize search engine if not already done
     if (!SearchEngine.manifest) {
       SearchEngine.init();
@@ -193,6 +373,7 @@ function hideSearchModal() {
   if (modal) {
     modal.style.display = 'none';
   }
+  AuthorAutocomplete.hide();
 }
 
 // Close modal when clicking outside
@@ -200,6 +381,7 @@ window.onclick = function(event) {
   const modal = document.getElementById('searchModal');
   if (event.target === modal) {
     modal.style.display = 'none';
+    AuthorAutocomplete.hide();
   }
 };
 
@@ -262,19 +444,19 @@ function displaySearchResults(results, query) {
   }
 
   const queryLower = query.toLowerCase();
-  
+
   let html = `<p class="search-count">Found ${results.length}${results.length >= 500 ? '+' : ''} messages</p>`;
-  
+
   for (const msg of results.slice(0, 100)) {
     const link = SearchEngine.getMessageLink(msg);
     let content = escapeHtml(msg.x);
-    
+
     // Highlight search term
     if (query) {
       const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
       content = content.replace(regex, '<span class="search-result-highlight">$1</span>');
     }
-    
+
     // Truncate long content
     if (content.length > 200) {
       // Try to show context around the match
@@ -315,7 +497,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     let debounceTimer;
-    
+
     searchInput.addEventListener('input', function(e) {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
@@ -327,7 +509,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Initialize search engine in background
   SearchEngine.init();
-  
+
+  // Initialize author autocomplete
+  AuthorAutocomplete.init();
+
   // Scroll to message if hash present
   if (window.location.hash) {
     setTimeout(() => {
@@ -363,7 +548,7 @@ function quickSearchPage(query) {
     if (text.includes(query)) {
       msg.style.display = 'flex';
       matchCount++;
-      
+
       // Highlight matches
       const regex = new RegExp(`(${escapeRegExp(query)})`, 'gi');
       textEl.innerHTML = originalText.replace(regex, '<span class="search-result-highlight">$1</span>');
@@ -415,11 +600,15 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     hideSearchModal();
   }
-  
+
   // Enter in search modal triggers search
   if (e.key === 'Enter') {
     const modal = document.getElementById('searchModal');
     if (modal && modal.style.display === 'block') {
+      // If author dropdown is open and a choice is active, let autocomplete handle enter
+      const dd = document.getElementById('author-dropdown');
+      if (dd && dd.style.display === 'block') return;
+
       e.preventDefault();
       performSearch();
     }

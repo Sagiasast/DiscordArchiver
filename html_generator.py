@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 import html
 import re
+from urllib.parse import quote
 
 
 class HTMLGenerator:
@@ -76,6 +77,72 @@ class HTMLGenerator:
         return var_re.sub(replace_var, template)
 
     # --------------------------
+    # Deterministic colored avatars
+    # --------------------------
+    def _hsl_to_hex(self, h: float, s: float, l: float) -> str:
+        """Convert HSL to hex color."""
+        s /= 100.0
+        l /= 100.0
+
+        c = (1 - abs(2 * l - 1)) * s
+        x = c * (1 - abs(((h / 60.0) % 2) - 1))
+        m = l - c / 2
+
+        if 0 <= h < 60:
+            r, g, b = c, x, 0
+        elif 60 <= h < 120:
+            r, g, b = x, c, 0
+        elif 120 <= h < 180:
+            r, g, b = 0, c, x
+        elif 180 <= h < 240:
+            r, g, b = 0, x, c
+        elif 240 <= h < 300:
+            r, g, b = x, 0, c
+        else:
+            r, g, b = c, 0, x
+
+        r = int((r + m) * 255)
+        g = int((g + m) * 255)
+        b = int((b + m) * 255)
+
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _user_color_hex(self, user_id: int) -> str:
+        """Deterministic color from user_id. Stable across runs/updates."""
+        try:
+            uid = int(user_id)
+        except Exception:
+            uid = 0
+        hue = (uid * 37) % 360
+        return self._hsl_to_hex(hue, 70, 45)
+
+    def _initials(self, display_name: str) -> str:
+        """Get 1–2 initials."""
+        name = (display_name or "").strip()
+        if not name:
+            return "?"
+        parts = [p for p in re.split(r"\s+", name) if p]
+        if len(parts) == 1:
+            return parts[0][:2].upper()
+        return (parts[0][:1] + parts[1][:1]).upper()
+
+    def _avatar_svg_data_uri(self, user_id: int, display_name: str) -> str:
+        """
+        Deterministic colored SVG avatar with initials.
+        """
+        color = self._user_color_hex(user_id)
+        initials = self._initials(display_name)
+
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
+            f"<rect width='40' height='40' rx='20' fill='{color}'/>"
+            "<text x='20' y='25' text-anchor='middle' "
+            "font-family='Segoe UI, Arial' font-size='14' fill='white' font-weight='600'>"
+            f"{html.escape(initials)}</text></svg>"
+        )
+        return "data:image/svg+xml;charset=utf-8," + quote(svg, safe="")
+
+    # --------------------------
     # Generation
     # --------------------------
     def generate_all(self):
@@ -88,22 +155,17 @@ class HTMLGenerator:
         """Generate HTML for a single server"""
         server_id = server_path.name.replace("server_", "")
 
-        # Load server info
         with open(server_path / "server_info.json", "r", encoding="utf-8") as f:
             server_info = json.load(f)
 
-        # Load channels
         with open(server_path / "channels.json", "r", encoding="utf-8") as f:
             channels = json.load(f)
 
-        # Create output directory
         output_dir = self.output_path / server_id
         output_dir.mkdir(exist_ok=True)
 
-        # Generate index page (templated)
         self.generate_index(output_dir, server_info, channels)
 
-        # Generate channel pages (existing HTML generation, but modal is now a component)
         for channel in channels:
             self.generate_channel_pages(
                 server_path / f"channel_{channel['id']}",
@@ -112,10 +174,7 @@ class HTMLGenerator:
                 server_info
             )
 
-        # Generate search index for client-side search
         self.generate_search_index(server_path, output_dir, channels)
-
-        # Copy CSS and JS into output folder
         self.generate_static_files(output_dir)
 
         print(f"Generated HTML for server: {server_info['name']}")
@@ -169,6 +228,14 @@ class HTMLGenerator:
 
         total_pages = max(1, (len(messages) + self.messages_per_page - 1) // self.messages_per_page)
 
+        msg_by_id: Dict[str, Dict] = {}
+        page_by_id: Dict[str, int] = {}
+
+        for idx, m in enumerate(messages):
+            mid = str(m.get("id"))
+            msg_by_id[mid] = m
+            page_by_id[mid] = (idx // self.messages_per_page) + 1
+
         for page_num in range(1, total_pages + 1):
             start_idx = (page_num - 1) * self.messages_per_page
             end_idx = min(start_idx + self.messages_per_page, len(messages))
@@ -176,17 +243,19 @@ class HTMLGenerator:
 
             self.generate_channel_page(
                 output_dir, channel, server_info,
-                page_messages, page_num, total_pages
+                page_messages, page_num, total_pages,
+                msg_by_id, page_by_id
             )
 
     def generate_channel_page(self, output_dir: Path, channel: Dict,
-                            server_info: Dict, messages: List[Dict],
-                            page_num: int, total_pages: int):
+                              server_info: Dict, messages: List[Dict],
+                              page_num: int, total_pages: int,
+                              msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]):
 
         tpl = self.load_template("channel.html")
 
         pagination = self.generate_pagination(channel["id"], page_num, total_pages)
-        messages_html = self.generate_messages_html(messages)
+        messages_html = self.generate_messages_html(messages, channel["id"], msg_by_id, page_by_id)
 
         topic_html = ""
         if channel.get("topic"):
@@ -203,9 +272,7 @@ class HTMLGenerator:
 
         html_content = self.render_template(tpl, context)
         filename = f"channel_{channel['id']}_p{page_num}.html"
-
         (output_dir / filename).write_text(html_content, encoding="utf-8")
-
 
     def generate_pagination(self, channel_id: int, page_num: int, total_pages: int) -> str:
         """Generate pagination HTML"""
@@ -229,8 +296,17 @@ class HTMLGenerator:
         parts.append("</div>")
         return "\n".join(parts)
 
-    def generate_messages_html(self, messages: List[Dict]) -> str:
-        """Generate HTML for messages"""
+    def generate_messages_html(self, messages: List[Dict], channel_id: int,
+                               msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]) -> str:
+        """Generate HTML for messages (with mentions + reply previews)"""
+
+        user_map: Dict[str, str] = {}
+        for msg in messages:
+            author = msg.get("author", {})
+            uid = author.get("id")
+            if uid is not None:
+                user_map[str(uid)] = author.get("display_name") or author.get("name") or str(uid)
+
         html_parts = []
         last_author = None
         last_timestamp = None
@@ -245,29 +321,45 @@ class HTMLGenerator:
                 if time_diff < 300:
                     group_message = True
 
-            html_parts.append(self.generate_grouped_message(msg) if group_message else self.generate_full_message(msg))
+            if group_message:
+                html_parts.append(self.generate_grouped_message(msg, user_map, channel_id, msg_by_id, page_by_id))
+            else:
+                html_parts.append(self.generate_full_message(msg, user_map, channel_id, msg_by_id, page_by_id))
 
             last_author = author_name
             last_timestamp = timestamp
 
         return "\n".join(html_parts)
 
-    def generate_full_message(self, msg: Dict) -> str:
-        """Generate HTML for a full message with avatar and author"""
+    def generate_full_message(self, msg: Dict, user_map: Dict[str, str],
+                              channel_id: int, msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]) -> str:
+        """Generate HTML for a full message with avatar and author + reply preview"""
         author = msg["author"]
         timestamp = self.format_timestamp(msg["timestamp"])
-        content = self.format_content(msg.get("content", ""))
+        content = self.format_content(msg.get("content", ""), user_map)
+        reply_html = self.render_reply_context(msg, channel_id, msg_by_id, page_by_id, user_map)
 
-        avatar_url = author.get("avatar_url", "data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
+        display_name = author.get("display_name") or author.get("name") or "Unknown"
+        try:
+            uid = int(author.get("id", 0) or 0)
+        except Exception:
+            uid = 0
+
+        fallback = self._avatar_svg_data_uri(uid, display_name)
+
+        # Use real avatar if present, but ALWAYS fallback on error
+        src = author.get("avatar_url") or fallback
+        onerror = f"this.onerror=null;this.src='{fallback}';"
 
         return f"""
         <div class="message" id="msg-{msg['id']}">
             <div class="message-avatar">
-                <img src="{avatar_url}" alt="{html.escape(author['name'])}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%235865F2%22 width=%2240%22 height=%2240%22/></svg>'">
+                <img src="{src}" alt="" onerror="{onerror}">
             </div>
             <div class="message-content">
+                {reply_html}
                 <div class="message-header">
-                    <span class="message-author">{html.escape(author.get('display_name', author['name']))}</span>
+                    <span class="message-author">{html.escape(display_name)}</span>
                     <span class="message-timestamp">{timestamp}</span>
                     {' <span class="message-edited">(edited)</span>' if msg.get('edited_timestamp') else ''}
                     {' <span class="message-bot-tag">BOT</span>' if author.get('bot') else ''}
@@ -279,15 +371,18 @@ class HTMLGenerator:
             </div>
         </div>"""
 
-    def generate_grouped_message(self, msg: Dict) -> str:
-        """Generate HTML for a grouped message (no avatar, compact)"""
+    def generate_grouped_message(self, msg: Dict, user_map: Dict[str, str],
+                                 channel_id: int, msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]) -> str:
+        """Generate HTML for a grouped message (no avatar, compact) + reply preview"""
         timestamp = self.format_timestamp(msg["timestamp"])
-        content = self.format_content(msg.get("content", ""))
+        content = self.format_content(msg.get("content", ""), user_map)
+        reply_html = self.render_reply_context(msg, channel_id, msg_by_id, page_by_id, user_map)
 
         return f"""
         <div class="message message-grouped" id="msg-{msg['id']}">
             <div class="message-avatar"></div>
             <div class="message-content">
+                {reply_html}
                 <div class="message-text">
                     <span class="message-timestamp-inline">{timestamp}</span>
                     {content}
@@ -298,15 +393,31 @@ class HTMLGenerator:
             </div>
         </div>"""
 
-    def format_content(self, content: str) -> str:
-        """Format message content with Discord markdown (simple)"""
+    def format_content(self, content: str, user_map: Dict[str, str]) -> str:
+        """Format message content with Discord markdown (simple) + user mention rendering"""
         if not content:
             return ""
 
         content = html.escape(content)
 
-        # code blocks first (so we don't bold/italic inside them as easily)
-        content = re.sub(r"```(\w*)\n(.+?)\n```", r'<pre><code class="language-\1">\2</code></pre>', content, flags=re.DOTALL)
+        def replace_mention(match: re.Match) -> str:
+            user_id = match.group(1)
+            name = user_map.get(user_id, user_id)
+            safe_name = html.escape(name)
+            return (
+                f'<span class="mention mention-user" '
+                f'data-mention-id="{user_id}" '
+                f'data-mention-name="{safe_name}">@{safe_name}</span>'
+            )
+
+        content = re.sub(r"&lt;@!?(\d+)&gt;", replace_mention, content)
+
+        content = re.sub(
+            r"```(\w*)\n(.+?)\n```",
+            r'<pre><code class="language-\1">\2</code></pre>',
+            content,
+            flags=re.DOTALL
+        )
 
         content = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", content)
         content = re.sub(r"__(.+?)__", r"<u>\1</u>", content)
@@ -389,15 +500,11 @@ class HTMLGenerator:
         return "\n".join(html_parts)
 
     def generate_search_index(self, server_path: Path, output_dir: Path, channels: List[Dict]):
-        """
-        Generate chunked search index for client-side search.
-        Creates a compact index with message data for fast browser-based searching.
-        """
+        """Generate chunked search index for client-side search."""
         all_messages = []
-        channel_map = {}  # channel_id -> {name, category}
+        channel_map = {}
         author_set = set()
 
-        # Build channel map and collect all messages
         for channel in channels:
             channel_id = str(channel['id'])
             channel_map[channel_id] = {
@@ -412,30 +519,24 @@ class HTMLGenerator:
             with open(messages_file, 'r', encoding='utf-8') as f:
                 messages = json.load(f)
 
-            for msg in messages:
+            for idx, msg in enumerate(messages):
                 author_name = msg['author'].get('display_name', msg['author']['name'])
                 author_set.add(author_name)
+                page_num = (idx // self.messages_per_page) + 1
 
-                # Calculate which page this message is on
-                msg_index = messages.index(msg)
-                page_num = (msg_index // self.messages_per_page) + 1
-
-                # Compact format: [id, channel_id, author, timestamp, content, page]
                 all_messages.append({
-                    'i': msg['id'],  # message id
-                    'c': channel_id,  # channel id
-                    'a': author_name,  # author display name
-                    't': msg['timestamp'][:10],  # date only (YYYY-MM-DD)
-                    'x': msg.get('content', '')[:500],  # content (truncated for index)
-                    'p': page_num  # page number
+                    'i': msg['id'],
+                    'c': channel_id,
+                    'a': author_name,
+                    't': msg['timestamp'][:10],
+                    'x': msg.get('content', '')[:500],
+                    'p': page_num
                 })
 
-        # Sort by timestamp descending (newest first)
         all_messages.sort(key=lambda m: m['t'], reverse=True)
 
-        # Generate manifest with metadata
         total_chunks = max(1, (len(all_messages) + self.index_chunk_size - 1) // self.index_chunk_size)
-        
+
         manifest = {
             'version': 1,
             'totalMessages': len(all_messages),
@@ -449,11 +550,9 @@ class HTMLGenerator:
             }
         }
 
-        # Write manifest
         with open(output_dir / 'search_manifest.json', 'w', encoding='utf-8') as f:
             json.dump(manifest, f, separators=(',', ':'))
 
-        # Write chunked index files
         for chunk_num in range(total_chunks):
             start_idx = chunk_num * self.index_chunk_size
             end_idx = min(start_idx + self.index_chunk_size, len(all_messages))
@@ -472,6 +571,7 @@ class HTMLGenerator:
 
         css_src = self.templates_dir / "style.css"
         js_src = self.templates_dir / "script.js"
+        ico_src = self.templates_dir / "favicon.ico"
 
         if not css_src.exists() or not js_src.exists():
             raise FileNotFoundError(
@@ -480,6 +580,52 @@ class HTMLGenerator:
 
         shutil.copyfile(css_src, output_dir / "style.css")
         shutil.copyfile(js_src, output_dir / "script.js")
+
+        # Optional favicon
+        if ico_src.exists():
+            shutil.copyfile(ico_src, output_dir / "favicon.ico")
+
+    def render_reply_context(self, msg: Dict, channel_id: int,
+                             msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int],
+                             user_map: Dict[str, str]) -> str:
+        ref = msg.get("reference")
+        if not ref:
+            return ""
+
+        ref_msg_id = ref.get("message_id")
+        ref_channel_id = ref.get("channel_id")
+
+        if not ref_msg_id or not ref_channel_id or int(ref_channel_id) != int(channel_id):
+            return ""
+
+        ref_msg = msg_by_id.get(str(ref_msg_id))
+        if not ref_msg:
+            return '<div class="reply-context"><span class="reply-missing">Reply to a message that is not in the archive</span></div>'
+
+        ref_author = ref_msg.get("author", {})
+        ref_author_name = ref_author.get("display_name") or ref_author.get("name") or "Unknown"
+
+        ref_content = (ref_msg.get("content") or "").strip()
+        if ref_content:
+            snippet = ref_content.splitlines()[0][:120]
+        else:
+            atts = ref_msg.get("attachments") or []
+            snippet = "(attachment)" if atts else "(message)"
+
+        snippet_html = self.format_content(snippet, user_map)
+
+        ref_page = page_by_id.get(str(ref_msg_id), 1)
+        link = f'channel_{channel_id}_p{ref_page}.html#msg-{ref_msg_id}'
+
+        return f"""
+        <div class="reply-context">
+            <span class="reply-line"></span>
+            <a class="reply-link" href="{link}">
+                <span class="reply-author">{html.escape(ref_author_name)}</span>
+                <span class="reply-snippet">{snippet_html}</span>
+            </a>
+        </div>
+        """
 
     @staticmethod
     def format_timestamp(timestamp_str: str) -> str:

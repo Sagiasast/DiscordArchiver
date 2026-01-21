@@ -1,0 +1,14 @@
+# Discord Archive - Requirements
+# Install with: pip install -r requirements.txt
+
+# Discord bot library 
+discord.py>=2.0.0
+
+# No other dependencies needed - everything else uses Python standard library:
+# - json 
+# - pathlib 
+# - datetime 
+# - html 
+# - re 
+# - http.server 
+# - argparse 

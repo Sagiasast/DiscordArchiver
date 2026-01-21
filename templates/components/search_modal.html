@@ -10,10 +10,23 @@
       </div>
 
       <div class="form-row">
-        <div class="form-group form-group-half">
+        <!-- Author: input that looks like a select + dropdown button -->
+        <div class="form-group form-group-half author-autocomplete">
           <label for="search-author">Author:</label>
-          <input type="text" id="search-author" placeholder="Author name..." list="author-suggestions" autocomplete="off" />
-          <datalist id="author-suggestions"></datalist>
+
+          <div class="select-like">
+            <input
+              type="text"
+              id="search-author"
+              placeholder="All Authors"
+              autocomplete="off"
+            />
+            <button type="button" class="select-like-btn" id="author-dropdown-btn" aria-label="Toggle author list">
+              ▼
+            </button>
+          </div>
+
+          <div id="author-dropdown" class="author-dropdown" style="display:none;"></div>
         </div>
 
         <div class="form-group form-group-half">
@@ -37,12 +50,12 @@
       </div>
 
       <button onclick="performSearch()" class="search-btn">
-        <span class="search-btn-icon">🔍</span> Search All Messages
+        <span class="search-btn-icon"></span> Search
       </button>
     </div>
 
     <div id="search-results" class="search-results">
-      <p class="search-placeholder">Enter search criteria and click Search to find messages across all channels.</p>
+      <p class="search-placeholder">Enter search criteria and click Search.</p>
     </div>
   </div>
 </div>
