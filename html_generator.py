@@ -283,6 +283,59 @@ class HTMLGenerator:
         </div>
         '''
 
+    def generate_channel_users_html(self, messages: List[Dict]) -> str:
+        """Generate HTML for the list of users who participated in a channel"""
+        if not messages:
+            return ""
+
+        # Collect unique users with their info
+        users: Dict[str, Dict] = {}
+        for msg in messages:
+            author = msg.get("author", {})
+            uid = str(author.get("id", ""))
+            if uid and uid not in users:
+                users[uid] = {
+                    "id": uid,
+                    "name": author.get("display_name") or author.get("name", "Unknown"),
+                    "avatar_url": author.get("avatar_url"),
+                    "bot": author.get("bot", False)
+                }
+
+        if not users:
+            return ""
+
+        # Sort users alphabetically by name
+        sorted_users = sorted(users.values(), key=lambda u: u["name"].lower())
+
+        html_parts = [
+            '<div class="channel-users">',
+            f'<div class="users-header">Members — {len(sorted_users)}</div>',
+            '<div class="users-list">'
+        ]
+
+        for user in sorted_users:
+            # Generate fallback avatar
+            try:
+                uid = int(user["id"])
+            except (ValueError, TypeError):
+                uid = 0
+            fallback = self._avatar_svg_data_uri(uid, user["name"])
+            avatar_src = user.get("avatar_url") or fallback
+            onerror = f"this.onerror=null;this.src='{fallback}';"
+
+            bot_tag = '<span class="user-bot-tag">BOT</span>' if user.get("bot") else ""
+
+            html_parts.append(f'''
+            <div class="user-item">
+                <img class="user-avatar" src="{avatar_src}" alt="" onerror="{onerror}">
+                <span class="user-name">{html.escape(user["name"])}</span>
+                {bot_tag}
+            </div>
+            ''')
+
+        html_parts.extend(['</div>', '</div>'])
+        return '\n'.join(html_parts)
+
     def generate_channel_pages(self, channel_path: Path, output_dir: Path,
                                channel: Dict, server_info: Dict):
         """Generate paginated HTML pages for a channel"""
@@ -306,6 +359,9 @@ class HTMLGenerator:
         # Generate pinned messages section HTML (only for page 1)
         pinned_section = self.generate_pinned_messages_section(channel_path, channel['id'])
 
+        # Generate channel users list (from all messages)
+        channel_users_html = self.generate_channel_users_html(messages)
+
         for page_num in range(1, total_pages + 1):
             start_idx = (page_num - 1) * self.messages_per_page
             end_idx = min(start_idx + self.messages_per_page, len(messages))
@@ -315,7 +371,8 @@ class HTMLGenerator:
                 output_dir, channel, server_info,
                 page_messages, page_num, total_pages,
                 msg_by_id, page_by_id,
-                pinned_section if page_num == 1 else ""
+                pinned_section if page_num == 1 else "",
+                channel_users_html
             )
 
         # Generate thread pages
@@ -335,7 +392,8 @@ class HTMLGenerator:
                               server_info: Dict, messages: List[Dict],
                               page_num: int, total_pages: int,
                               msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int],
-                              pinned_section: str = ""):
+                              pinned_section: str = "",
+                              channel_users: str = ""):
 
         tpl = self.load_template("channel.html")
 
@@ -352,6 +410,7 @@ class HTMLGenerator:
             "channel_name": html.escape(channel["name"]),
             "channel_topic": topic_html,
             "pinned_section": pinned_section,
+            "channel_users": channel_users,
             "messages_html": messages_html,
             "pagination": pagination,
         }
@@ -379,6 +438,9 @@ class HTMLGenerator:
         page_by_id = {str(m['id']): (idx // self.messages_per_page) + 1
                       for idx, m in enumerate(messages)}
 
+        # Generate thread users list
+        thread_users_html = self.generate_channel_users_html(messages)
+
         for page_num in range(1, total_pages + 1):
             start_idx = (page_num - 1) * self.messages_per_page
             end_idx = min(start_idx + self.messages_per_page, len(messages))
@@ -387,13 +449,15 @@ class HTMLGenerator:
             self.generate_thread_page(
                 output_dir, thread_info, parent_channel, server_info,
                 page_messages, page_num, total_pages,
-                msg_by_id, page_by_id
+                msg_by_id, page_by_id,
+                thread_users_html
             )
 
     def generate_thread_page(self, output_dir: Path, thread_info: Dict,
                              parent_channel: Dict, server_info: Dict,
                              messages: List[Dict], page_num: int, total_pages: int,
-                             msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]):
+                             msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int],
+                             channel_users: str = ""):
         """Generate a single thread page"""
         tpl = self.load_template("thread.html")
 
@@ -409,6 +473,7 @@ class HTMLGenerator:
             "channel_id": parent_channel["id"],
             "thread_name": html.escape(thread_info["name"]),
             "thread_message_count": thread_info.get("message_count", 0),
+            "channel_users": channel_users,
             "messages_html": messages_html,
             "pagination": pagination,
         }
@@ -871,10 +936,12 @@ class HTMLGenerator:
 
     @staticmethod
     def format_timestamp(timestamp_str: str) -> str:
-        """Format ISO timestamp to readable format"""
+        """Format ISO timestamp to readable format in local timezone"""
         try:
             dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            return dt.strftime("%Y-%m-%d %H:%M")
+            # Convert to local timezone
+            local_dt = dt.astimezone()
+            return local_dt.strftime("%Y-%m-%d %H:%M")
         except Exception:
             return timestamp_str
 

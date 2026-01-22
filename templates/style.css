@@ -1135,3 +1135,70 @@ body {
     margin-top: 4px;
     margin-bottom: 12px;
 }
+
+/* ================================
+   Channel Users List (Sidebar)
+   ================================ */
+.channel-users {
+    padding: 16px 8px;
+    border-top: 1px solid #202225;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.users-header {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #8e9297;
+    padding: 8px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.users-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.user-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: 4px;
+    gap: 10px;
+}
+
+.user-item:hover {
+    background-color: #3c3f45;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.user-name {
+    color: #8e9297;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-item:hover .user-name {
+    color: #dcddde;
+}
+
+.user-bot-tag {
+    background-color: #5865f2;
+    color: white;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
