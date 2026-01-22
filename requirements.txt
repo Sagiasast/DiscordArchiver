@@ -3,6 +3,7 @@
 
 # Discord bot library 
 discord.py>=2.0.0
+questionary>=2.0.1
 rich
 
 # No other dependencies needed - everything else uses Python standard library:
