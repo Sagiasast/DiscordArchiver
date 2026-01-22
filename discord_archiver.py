@@ -414,6 +414,12 @@ class DiscordArchiver(commands.Bot):
         except Exception as e:
             logger.error(f"Failed to rebuild {text_file}: {e}")
 
+        # Archive pinned messages
+        pinned_messages = await self.archive_pinned_messages(channel, channel_path)
+
+        # Archive threads
+        threads_data = await self.archive_threads(channel, channel_path, incremental)
+
         # Channel metadata
         channel_data = {
             'id': channel.id,
@@ -422,14 +428,20 @@ class DiscordArchiver(commands.Bot):
             'position': channel.position,
             'category': channel.category.name if channel.category else None,
             'message_count': len(all_messages),
-            'last_message_id': last_message_id  # last NEW message id this run
+            'last_message_id': last_message_id,  # last NEW message id this run
+            'pinned_count': len(pinned_messages),
+            'threads': threads_data
         }
 
-        # Update metadata
+        # Update metadata with thread info for incremental updates
         self.metadata['channels'][channel_id] = channel_data
+        self.metadata['channels'][channel_id]['threads'] = {
+            str(t['id']): {'name': t['name'], 'last_message_id': t['last_message_id']}
+            for t in threads_data
+        }
         self.save_metadata()
 
-        logger.info(f'Channel archived: #{channel.name} ({new_message_count} new messages)')
+        logger.info(f'Channel archived: #{channel.name} ({new_message_count} new messages, {len(pinned_messages)} pinned, {len(threads_data)} threads)')
         return channel_data
 
     async def serialize_message(self, message: discord.Message, channel_path: Optional[Path] = None) -> Dict:
@@ -499,8 +511,201 @@ class DiscordArchiver(commands.Bot):
                 'message_id': message.reference.message_id,
                 'channel_id': message.reference.channel_id
             } if message.reference else None,
-            'pinned': message.pinned
+            'pinned': message.pinned,
+            'thread': {
+                'id': message.thread.id,
+                'name': message.thread.name,
+                'message_count': message.thread.message_count
+            } if hasattr(message, 'thread') and message.thread else None
         }
+
+    async def archive_pinned_messages(
+        self,
+        channel: discord.TextChannel,
+        channel_path: Path
+    ) -> List[Dict]:
+        """
+        Fetch and archive pinned messages for a channel.
+        Returns list of pinned message data.
+        """
+        logger.info(f'  Fetching pinned messages for #{channel.name}')
+        pinned_messages = []
+
+        try:
+            pins = await channel.pins()
+            for msg in pins:
+                # Skip bot messages if include_bots is False
+                if msg.author.bot and not self.include_bots:
+                    continue
+
+                msg_data = await self.serialize_message(msg, channel_path)
+                pinned_messages.append(msg_data)
+
+            # Save pinned messages to separate file
+            pinned_file = channel_path / 'pinned_messages.json'
+            with open(pinned_file, 'w', encoding='utf-8') as f:
+                json.dump(pinned_messages, f, indent=2, ensure_ascii=False)
+
+            logger.info(f'  Archived {len(pinned_messages)} pinned messages')
+
+        except discord.Forbidden:
+            logger.warning(f'  No permission to read pins for #{channel.name}')
+        except Exception as e:
+            logger.error(f'  Error fetching pins: {e}')
+
+        return pinned_messages
+
+    async def archive_threads(
+        self,
+        channel: discord.TextChannel,
+        channel_path: Path,
+        incremental: bool = False
+    ) -> List[Dict]:
+        """
+        Archive all threads (active and archived) for a channel.
+        Returns list of thread metadata.
+        """
+        logger.info(f'  Archiving threads for #{channel.name}')
+        threads_data = []
+        threads_dir = channel_path / 'threads'
+        threads_dir.mkdir(exist_ok=True)
+
+        all_threads = []
+
+        # Get active threads
+        try:
+            for thread in channel.threads:
+                all_threads.append((thread, False))  # (thread, is_archived)
+        except Exception as e:
+            logger.error(f'  Error getting active threads: {e}')
+
+        # Get archived threads
+        try:
+            async for thread in channel.archived_threads(limit=None):
+                all_threads.append((thread, True))
+
+                # API delay to avoid rate limits
+                if self.api_delay > 0:
+                    await asyncio.sleep(self.api_delay)
+        except discord.Forbidden:
+            logger.warning(f'  No permission to read archived threads for #{channel.name}')
+        except Exception as e:
+            logger.error(f'  Error getting archived threads: {e}')
+
+        # Archive each thread
+        for thread, is_archived in all_threads:
+            try:
+                thread_data = await self.archive_single_thread(
+                    thread, threads_dir, incremental, is_archived
+                )
+                threads_data.append(thread_data)
+            except Exception as e:
+                logger.error(f'  Error archiving thread {thread.name}: {e}')
+
+        logger.info(f'  Archived {len(threads_data)} threads')
+        return threads_data
+
+    async def archive_single_thread(
+        self,
+        thread: discord.Thread,
+        threads_dir: Path,
+        incremental: bool,
+        is_archived: bool
+    ) -> Dict:
+        """Archive a single thread."""
+        logger.info(f'    Archiving thread: {thread.name}')
+
+        thread_path = threads_dir / f'thread_{thread.id}'
+        thread_path.mkdir(exist_ok=True)
+
+        # Thread metadata
+        thread_info = {
+            'id': thread.id,
+            'name': thread.name,
+            'parent_id': thread.parent_id,
+            'parent_message_id': thread.id,  # Thread ID equals starter message ID
+            'owner_id': thread.owner_id,
+            'created_at': thread.created_at.isoformat() if thread.created_at else None,
+            'archived': is_archived,
+            'message_count': thread.message_count,
+            'last_message_id': None
+        }
+
+        # Get owner name if possible
+        try:
+            owner = thread.guild.get_member(thread.owner_id)
+            if owner:
+                thread_info['owner_name'] = owner.display_name
+        except Exception:
+            pass
+
+        # Archive thread messages (similar to channel archiving)
+        after_obj = None
+        thread_id_str = str(thread.id)
+
+        if incremental:
+            # Check metadata for last archived message
+            channel_meta = self.metadata['channels'].get(str(thread.parent_id), {})
+            threads_meta = channel_meta.get('threads', {})
+            if thread_id_str in threads_meta:
+                last_id = threads_meta[thread_id_str].get('last_message_id')
+                if last_id:
+                    after_obj = discord.Object(id=int(last_id))
+
+        new_messages = []
+        last_message_id = None
+
+        try:
+            async for message in thread.history(
+                limit=self.message_limit,
+                after=after_obj,
+                oldest_first=True
+            ):
+                if message.author.bot and not self.include_bots:
+                    continue
+
+                msg_data = await self.serialize_message(message, thread_path)
+                new_messages.append(msg_data)
+                last_message_id = message.id
+
+                if self.api_delay > 0 and len(new_messages) % 100 == 0:
+                    await asyncio.sleep(self.api_delay)
+
+        except discord.Forbidden:
+            logger.warning(f'    No permission to read thread: {thread.name}')
+        except Exception as e:
+            logger.error(f'    Error reading thread messages: {e}')
+
+        # Load and merge existing messages
+        messages_file = thread_path / 'messages.json'
+        all_messages = []
+
+        if messages_file.exists():
+            try:
+                with open(messages_file, 'r', encoding='utf-8') as f:
+                    all_messages = json.load(f)
+            except Exception:
+                all_messages = []
+
+        if incremental:
+            all_messages.extend(new_messages)
+        else:
+            all_messages = new_messages
+
+        # Save messages
+        with open(messages_file, 'w', encoding='utf-8') as f:
+            json.dump(all_messages, f, indent=2, ensure_ascii=False)
+
+        # Save thread info
+        thread_info['message_count'] = len(all_messages)
+        thread_info['last_message_id'] = last_message_id
+
+        with open(thread_path / 'thread_info.json', 'w', encoding='utf-8') as f:
+            json.dump(thread_info, f, indent=2)
+
+        logger.info(f'    Thread archived: {thread.name} ({len(new_messages)} new messages)')
+
+        return thread_info
 
     @commands.command(name='full')
     async def archive_full(self, ctx):

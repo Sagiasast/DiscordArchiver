@@ -152,6 +152,10 @@ const SearchEngine = {
 
   // Get link to specific message
   getMessageLink(msg) {
+    // Thread messages use thread_ prefix
+    if (msg.th) {
+      return `thread_${msg.c}_p${msg.p}.html#msg-${msg.i}`;
+    }
     return `channel_${msg.c}_p${msg.p}.html#msg-${msg.i}`;
   }
 };
@@ -645,6 +649,19 @@ function disableAutoReload() {
   clearInterval(reloadInterval);
   autoReloadEnabled = false;
   console.log('Auto-reload disabled');
+}
+
+// ============================================
+// Pinned Messages Toggle
+// ============================================
+function togglePinnedMessages() {
+  const content = document.getElementById('pinned-content');
+  const toggle = document.querySelector('.pinned-toggle');
+
+  if (content && toggle) {
+    content.classList.toggle('collapsed');
+    toggle.classList.toggle('collapsed');
+  }
 }
 
 // ============================================

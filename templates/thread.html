@@ -11,9 +11,16 @@
     {{> components/sidebar.html }}
 
     <div class="main-content">
-      {{> components/channel_header.html }}
-
-      {{pinned_section}}
+      <div class="thread-header">
+        <div class="thread-breadcrumb">
+          <a href="channel_{{channel_id}}_p1.html">#{{channel_name}}</a>
+          <span class="breadcrumb-separator">›</span>
+          <span class="thread-icon-header">🧵</span>
+          <span class="current-thread">{{thread_name}}</span>
+        </div>
+        <p class="thread-info">{{thread_message_count}} messages in thread</p>
+        {{pagination}}
+      </div>
 
       <div class="messages">
         {{messages_html}}

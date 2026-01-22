@@ -195,7 +195,7 @@ class HTMLGenerator:
         (output_dir / "index.html").write_text(html_content, encoding="utf-8")
 
     def generate_channel_list(self, channels: List[Dict]) -> str:
-        """Generate HTML for channel list"""
+        """Generate HTML for channel list with thread indicators"""
         categories: Dict[str, List[Dict]] = {}
         for channel in sorted(channels, key=lambda c: c.get("position", 0)):
             category = channel.get("category", "Uncategorized")
@@ -206,15 +206,82 @@ class HTMLGenerator:
             html_parts.append('<div class="category">')
             html_parts.append(f'<div class="category-name">{html.escape(category)}</div>')
             for channel in category_channels:
+                thread_count = len(channel.get('threads', []))
+                thread_badge = ''
+                if thread_count > 0:
+                    thread_badge = f'<span class="thread-badge">{thread_count} 🧵</span>'
+
+                pinned_count = channel.get('pinned_count', 0)
+                pinned_badge = ''
+                if pinned_count > 0:
+                    pinned_badge = f'<span class="pinned-badge">{pinned_count} 📌</span>'
+
                 html_parts.append(
                     f'<a href="channel_{channel["id"]}_p1.html" class="channel-link">'
                     f'<span class="channel-hash">#</span> {html.escape(channel["name"])}'
+                    f'{pinned_badge}{thread_badge}'
                     f'<span class="message-count">({channel.get("message_count", 0)} msgs)</span>'
                     f"</a>"
                 )
             html_parts.append("</div>")
 
         return "\n".join(html_parts)
+
+    def generate_pinned_messages_section(self, channel_path: Path, _channel_id: int) -> str:
+        """Generate HTML for pinned messages section (collapsible)"""
+        pinned_file = channel_path / 'pinned_messages.json'
+        if not pinned_file.exists():
+            return ""
+
+        with open(pinned_file, 'r', encoding='utf-8') as f:
+            pinned = json.load(f)
+
+        if not pinned:
+            return ""
+
+        html_parts = [
+            '<div class="pinned-messages-section">',
+            '  <div class="pinned-header" onclick="togglePinnedMessages()">',
+            f'    <span class="pin-icon">📌</span>',
+            f'    <span class="pinned-count">{len(pinned)} Pinned Message{"s" if len(pinned) != 1 else ""}</span>',
+            '    <span class="pinned-toggle">▼</span>',
+            '  </div>',
+            '  <div class="pinned-content" id="pinned-content">'
+        ]
+
+        for msg in pinned:
+            author = msg['author']
+            display_name = author.get('display_name') or author.get('name', 'Unknown')
+            content = html.escape((msg.get('content', '') or '')[:200])
+            timestamp = self.format_timestamp(msg['timestamp'])
+
+            html_parts.append(f'''
+            <a href="#msg-{msg['id']}" class="pinned-message">
+                <span class="pinned-author">{html.escape(display_name)}</span>
+                <span class="pinned-preview">{content}</span>
+                <span class="pinned-timestamp">{timestamp}</span>
+            </a>
+            ''')
+
+        html_parts.extend(['  </div>', '</div>'])
+        return '\n'.join(html_parts)
+
+    def generate_thread_indicator(self, thread_info: Dict, _channel_id: int) -> str:
+        """Generate HTML for thread indicator on a message"""
+        if not thread_info:
+            return ""
+
+        thread_link = f"thread_{thread_info['id']}_p1.html"
+
+        return f'''
+        <div class="thread-indicator">
+            <span class="thread-icon">💬</span>
+            <a href="{thread_link}" class="thread-link">
+                <span class="thread-name">{html.escape(thread_info.get('name', 'Thread'))}</span>
+                <span class="thread-count">{thread_info.get('message_count', 0)} replies</span>
+            </a>
+        </div>
+        '''
 
     def generate_channel_pages(self, channel_path: Path, output_dir: Path,
                                channel: Dict, server_info: Dict):
@@ -236,6 +303,9 @@ class HTMLGenerator:
             msg_by_id[mid] = m
             page_by_id[mid] = (idx // self.messages_per_page) + 1
 
+        # Generate pinned messages section HTML (only for page 1)
+        pinned_section = self.generate_pinned_messages_section(channel_path, channel['id'])
+
         for page_num in range(1, total_pages + 1):
             start_idx = (page_num - 1) * self.messages_per_page
             end_idx = min(start_idx + self.messages_per_page, len(messages))
@@ -244,13 +314,28 @@ class HTMLGenerator:
             self.generate_channel_page(
                 output_dir, channel, server_info,
                 page_messages, page_num, total_pages,
-                msg_by_id, page_by_id
+                msg_by_id, page_by_id,
+                pinned_section if page_num == 1 else ""
             )
+
+        # Generate thread pages
+        threads_dir = channel_path / 'threads'
+        if threads_dir.exists():
+            for thread_dir in threads_dir.iterdir():
+                if thread_dir.is_dir() and thread_dir.name.startswith('thread_'):
+                    thread_info_file = thread_dir / 'thread_info.json'
+                    if thread_info_file.exists():
+                        with open(thread_info_file, 'r', encoding='utf-8') as f:
+                            thread_info = json.load(f)
+                        self.generate_thread_pages(
+                            thread_dir, output_dir, thread_info, channel, server_info
+                        )
 
     def generate_channel_page(self, output_dir: Path, channel: Dict,
                               server_info: Dict, messages: List[Dict],
                               page_num: int, total_pages: int,
-                              msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]):
+                              msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int],
+                              pinned_section: str = ""):
 
         tpl = self.load_template("channel.html")
 
@@ -266,6 +351,7 @@ class HTMLGenerator:
             "server_name": html.escape(server_info["name"]),
             "channel_name": html.escape(channel["name"]),
             "channel_topic": topic_html,
+            "pinned_section": pinned_section,
             "messages_html": messages_html,
             "pagination": pagination,
         }
@@ -273,6 +359,85 @@ class HTMLGenerator:
         html_content = self.render_template(tpl, context)
         filename = f"channel_{channel['id']}_p{page_num}.html"
         (output_dir / filename).write_text(html_content, encoding="utf-8")
+
+    def generate_thread_pages(self, thread_path: Path, output_dir: Path,
+                              thread_info: Dict, parent_channel: Dict, server_info: Dict):
+        """Generate paginated HTML pages for a thread"""
+        messages_file = thread_path / 'messages.json'
+        if not messages_file.exists():
+            return
+
+        with open(messages_file, 'r', encoding='utf-8') as f:
+            messages = json.load(f)
+
+        if not messages:
+            return
+
+        total_pages = max(1, (len(messages) + self.messages_per_page - 1) // self.messages_per_page)
+
+        msg_by_id = {str(m['id']): m for m in messages}
+        page_by_id = {str(m['id']): (idx // self.messages_per_page) + 1
+                      for idx, m in enumerate(messages)}
+
+        for page_num in range(1, total_pages + 1):
+            start_idx = (page_num - 1) * self.messages_per_page
+            end_idx = min(start_idx + self.messages_per_page, len(messages))
+            page_messages = messages[start_idx:end_idx]
+
+            self.generate_thread_page(
+                output_dir, thread_info, parent_channel, server_info,
+                page_messages, page_num, total_pages,
+                msg_by_id, page_by_id
+            )
+
+    def generate_thread_page(self, output_dir: Path, thread_info: Dict,
+                             parent_channel: Dict, server_info: Dict,
+                             messages: List[Dict], page_num: int, total_pages: int,
+                             msg_by_id: Dict[str, Dict], page_by_id: Dict[str, int]):
+        """Generate a single thread page"""
+        tpl = self.load_template("thread.html")
+
+        pagination = self.generate_thread_pagination(thread_info['id'], page_num, total_pages)
+        messages_html = self.generate_messages_html(
+            messages, thread_info['id'], msg_by_id, page_by_id
+        )
+
+        context = {
+            "title": f"{thread_info['name']} - #{parent_channel['name']} - {server_info['name']}",
+            "server_name": html.escape(server_info["name"]),
+            "channel_name": html.escape(parent_channel["name"]),
+            "channel_id": parent_channel["id"],
+            "thread_name": html.escape(thread_info["name"]),
+            "thread_message_count": thread_info.get("message_count", 0),
+            "messages_html": messages_html,
+            "pagination": pagination,
+        }
+
+        html_content = self.render_template(tpl, context)
+        filename = f"thread_{thread_info['id']}_p{page_num}.html"
+        (output_dir / filename).write_text(html_content, encoding='utf-8')
+
+    def generate_thread_pagination(self, thread_id: int, page_num: int, total_pages: int) -> str:
+        """Generate pagination HTML for threads"""
+        if total_pages <= 1:
+            return ""
+
+        parts = ['<div class="pagination">']
+
+        if page_num > 1:
+            parts.append(f'<a href="thread_{thread_id}_p{page_num-1}.html" class="page-btn">← Previous</a>')
+        else:
+            parts.append('<span class="page-btn disabled">← Previous</span>')
+
+        parts.append(f'<span class="page-info">Page {page_num} of {total_pages}</span>')
+
+        if page_num < total_pages:
+            parts.append(f'<a href="thread_{thread_id}_p{page_num+1}.html" class="page-btn">Next →</a>')
+        else:
+            parts.append('<span class="page-btn disabled">Next →</span>')
+
+        parts.append("</div>")
+        return "\n".join(parts)
 
     def generate_pagination(self, channel_id: int, page_num: int, total_pages: int) -> str:
         """Generate pagination HTML"""
@@ -351,8 +516,21 @@ class HTMLGenerator:
         src = author.get("avatar_url") or fallback
         onerror = f"this.onerror=null;this.src='{fallback}';"
 
+        # Pin indicator
+        pin_indicator = ''
+        if msg.get('pinned'):
+            pin_indicator = '<span class="pin-badge" title="Pinned">📌</span>'
+
+        # Thread indicator
+        thread_html = ''
+        if msg.get('thread'):
+            thread_html = self.generate_thread_indicator(msg['thread'], channel_id)
+
+        # Add pinned class for visual highlight
+        pinned_class = ' message-pinned' if msg.get('pinned') else ''
+
         return f"""
-        <div class="message" id="msg-{msg['id']}">
+        <div class="message{pinned_class}" id="msg-{msg['id']}">
             <div class="message-avatar">
                 <img src="{src}" alt="" onerror="{onerror}">
             </div>
@@ -360,6 +538,7 @@ class HTMLGenerator:
                 {reply_html}
                 <div class="message-header">
                     <span class="message-author">{html.escape(display_name)}</span>
+                    {pin_indicator}
                     <span class="message-timestamp">{timestamp}</span>
                     {' <span class="message-edited">(edited)</span>' if msg.get('edited_timestamp') else ''}
                     {' <span class="message-bot-tag">BOT</span>' if author.get('bot') else ''}
@@ -368,6 +547,7 @@ class HTMLGenerator:
                 {self.generate_attachments_html(msg.get('attachments', []))}
                 {self.generate_embeds_html(msg.get('embeds', []))}
                 {self.generate_reactions_html(msg.get('reactions', []))}
+                {thread_html}
             </div>
         </div>"""
 
@@ -378,18 +558,32 @@ class HTMLGenerator:
         content = self.format_content(msg.get("content", ""), user_map)
         reply_html = self.render_reply_context(msg, channel_id, msg_by_id, page_by_id, user_map)
 
+        # Pin indicator
+        pin_indicator = ''
+        if msg.get('pinned'):
+            pin_indicator = '<span class="pin-badge" title="Pinned">📌</span> '
+
+        # Thread indicator
+        thread_html = ''
+        if msg.get('thread'):
+            thread_html = self.generate_thread_indicator(msg['thread'], channel_id)
+
+        # Add pinned class for visual highlight
+        pinned_class = ' message-pinned' if msg.get('pinned') else ''
+
         return f"""
-        <div class="message message-grouped" id="msg-{msg['id']}">
+        <div class="message message-grouped{pinned_class}" id="msg-{msg['id']}">
             <div class="message-avatar"></div>
             <div class="message-content">
                 {reply_html}
                 <div class="message-text">
                     <span class="message-timestamp-inline">{timestamp}</span>
-                    {content}
+                    {pin_indicator}{content}
                 </div>
                 {self.generate_attachments_html(msg.get('attachments', []))}
                 {self.generate_embeds_html(msg.get('embeds', []))}
                 {self.generate_reactions_html(msg.get('reactions', []))}
+                {thread_html}
             </div>
         </div>"""
 
@@ -500,7 +694,7 @@ class HTMLGenerator:
         return "\n".join(html_parts)
 
     def generate_search_index(self, server_path: Path, output_dir: Path, channels: List[Dict]):
-        """Generate chunked search index for client-side search."""
+        """Generate chunked search index for client-side search including threads."""
         all_messages = []
         channel_map = {}
         author_set = set()
@@ -512,7 +706,8 @@ class HTMLGenerator:
                 'category': channel.get('category', 'Uncategorized')
             }
 
-            messages_file = server_path / f"channel_{channel['id']}" / "messages.json"
+            channel_path = server_path / f"channel_{channel['id']}"
+            messages_file = channel_path / "messages.json"
             if not messages_file.exists():
                 continue
 
@@ -532,6 +727,53 @@ class HTMLGenerator:
                     'x': msg.get('content', '')[:500],
                     'p': page_num
                 })
+
+            # Index thread messages
+            threads_dir = channel_path / 'threads'
+            if threads_dir.exists():
+                for thread_dir in threads_dir.iterdir():
+                    if not thread_dir.is_dir():
+                        continue
+
+                    thread_info_file = thread_dir / 'thread_info.json'
+                    thread_messages_file = thread_dir / 'messages.json'
+
+                    if not thread_messages_file.exists():
+                        continue
+
+                    thread_info = {}
+                    if thread_info_file.exists():
+                        with open(thread_info_file, 'r', encoding='utf-8') as f:
+                            thread_info = json.load(f)
+
+                    thread_id = str(thread_info.get('id', thread_dir.name.replace('thread_', '')))
+                    thread_name = thread_info.get('name', 'Thread')
+
+                    # Add thread to channel map
+                    channel_map[thread_id] = {
+                        'name': f"🧵 {thread_name}",
+                        'category': channel.get('category', 'Uncategorized'),
+                        'parent_channel': channel['name'],
+                        'is_thread': True
+                    }
+
+                    with open(thread_messages_file, 'r', encoding='utf-8') as f:
+                        thread_messages = json.load(f)
+
+                    for idx, msg in enumerate(thread_messages):
+                        author_name = msg['author'].get('display_name', msg['author']['name'])
+                        author_set.add(author_name)
+                        page_num = (idx // self.messages_per_page) + 1
+
+                        all_messages.append({
+                            'i': msg['id'],
+                            'c': thread_id,
+                            'a': author_name,
+                            't': msg['timestamp'][:10],
+                            'x': msg.get('content', '')[:500],
+                            'p': page_num,
+                            'th': True  # marker for thread message
+                        })
 
         all_messages.sort(key=lambda m: m['t'], reverse=True)
 
