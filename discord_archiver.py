@@ -7,6 +7,7 @@ Archives Discord server messages with incremental updates
 - Supports message limit per channel (--limit N)
 - Supports channel filtering (--channel NAME or --channel ID)
 - Supports downloading attachments locally (--download-attachments)
+- Supports skipping channels with no access or zero messages (--skip-empty)
 """
 
 import discord
@@ -18,6 +19,7 @@ from typing import Dict, List, Optional
 import logging
 import aiohttp
 import asyncio
+import shutil
 
 # Setup logging
 logging.basicConfig(
@@ -36,7 +38,8 @@ class DiscordArchiver(commands.Bot):
         message_limit: Optional[int] = None,
         channel_filter: Optional[List[str]] = None,
         download_attachments: bool = False,
-        api_delay: float = 0.0
+        api_delay: float = 0.0,
+        skip_empty: bool = False
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -54,6 +57,7 @@ class DiscordArchiver(commands.Bot):
         self.download_attachments = download_attachments  # Download attachments locally
         self._http_session: Optional[aiohttp.ClientSession] = None
         self.api_delay: float = api_delay  # Delay between API calls (seconds)
+        self.skip_empty = skip_empty  # Skip channels with no access or zero messages
 
         self.metadata_file = self.archive_path / "metadata.json"
         self.metadata = self.load_metadata()
@@ -295,7 +299,8 @@ class DiscordArchiver(commands.Bot):
                 continue
             try:
                 channel_data = await self.archive_channel(channel, server_path, incremental)
-                channels_data.append(channel_data)
+                if channel_data is not None:  # None means channel was skipped
+                    channels_data.append(channel_data)
             except Exception as e:
                 logger.error(f'Error archiving channel {channel.name}: {e}')
 
@@ -315,8 +320,8 @@ class DiscordArchiver(commands.Bot):
         channel: discord.TextChannel,
         server_path: Path,
         incremental: bool = False
-    ) -> Dict:
-        """Archive a single channel"""
+    ) -> Optional[Dict]:
+        """Archive a single channel. Returns None if channel should be skipped."""
         channel_id = str(channel.id)
         logger.info(f'Archiving channel: #{channel.name}')
 
@@ -335,6 +340,7 @@ class DiscordArchiver(commands.Bot):
         new_messages: List[Dict] = []
         last_message_id = None
         new_message_count = 0
+        no_access = False
 
         # Use message_limit if set, otherwise fetch all (None)
         fetch_limit = self.message_limit
@@ -367,8 +373,17 @@ class DiscordArchiver(commands.Bot):
 
         except discord.Forbidden:
             logger.warning(f'No permission to read channel: #{channel.name}')
+            no_access = True
         except Exception as e:
             logger.error(f'Error reading messages from #{channel.name}: {e}')
+
+        # Check if we should skip this channel due to no access (--skip-empty)
+        if self.skip_empty and no_access:
+            logger.info(f'Skipping channel: #{channel.name} (no access, --skip-empty)')
+            # Clean up empty directory
+            if channel_path.exists():
+                shutil.rmtree(channel_path, ignore_errors=True)
+            return None
 
         # Load existing messages if present
         messages_file = channel_path / 'messages.json'
@@ -406,6 +421,14 @@ class DiscordArchiver(commands.Bot):
                 all_messages = json.load(f)
         except Exception as e:
             logger.error(f"Failed to reload {messages_file}: {e}")
+
+        # Check if we should skip this channel due to zero messages (--skip-empty)
+        if self.skip_empty and len(all_messages) == 0:
+            logger.info(f'Skipping channel: #{channel.name} (0 messages, --skip-empty)')
+            # Clean up empty directory
+            if channel_path.exists():
+                shutil.rmtree(channel_path, ignore_errors=True)
+            return None
 
         # Always rewrite messages.txt from final list (prevents duplicates)
         text_file = channel_path / 'messages.txt'
@@ -753,7 +776,8 @@ def main():
         print("  --limit N              Limit messages per channel (default: unlimited)")
         print("  --channel NAME/ID      Only archive specific channel(s) (can be repeated)")
         print("  --download-attachments Download attachments locally (default: False)")
-        print("  --delay N              Delay in seconds between API batches (default: 0)")
+        print("  --delay N              Delay N seconds every 100 messages (default: 0)")
+        print("  --skip-empty           Skip channels with no access or zero messages (default: False)")
         sys.exit(1)
 
     token = sys.argv[1]
@@ -761,6 +785,7 @@ def main():
     archive_path = sys.argv[3] if len(sys.argv) > 3 and not str(sys.argv[3]).startswith("--") else "./discord_archive"
     include_bots = "--include-bots" in sys.argv
     download_attachments = "--download-attachments" in sys.argv
+    skip_empty = "--skip-empty" in sys.argv
 
     # Parse --limit N
     message_limit = None
@@ -803,7 +828,8 @@ def main():
         message_limit=message_limit,
         channel_filter=channel_filter if channel_filter else None,
         download_attachments=download_attachments,
-        api_delay=api_delay
+        api_delay=api_delay,
+        skip_empty=skip_empty
     )
     bot.run(token)
 

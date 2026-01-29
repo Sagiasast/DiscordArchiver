@@ -795,11 +795,31 @@ body {
 /* Message highlight when navigating from search */
 .message-highlighted {
     animation: highlight-pulse 3s ease-out;
+    position: relative;
+    border-left: 3px solid #5865f2;
+    border-radius: 4px;
+}
+
+.message-highlighted::before {
+    content: "▶";
+    position: absolute;
+    left: -24px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #5865f2;
+    font-size: 14px;
+    animation: arrow-pulse 1s ease-in-out 3;
 }
 
 @keyframes highlight-pulse {
-    0% { background-color: rgba(88, 101, 242, 0.4); }
+    0% { background-color: rgba(88, 101, 242, 0.5); }
+    50% { background-color: rgba(88, 101, 242, 0.3); }
     100% { background-color: transparent; }
+}
+
+@keyframes arrow-pulse {
+    0%, 100% { opacity: 1; transform: translateY(-50%) translateX(0); }
+    50% { opacity: 0.7; transform: translateY(-50%) translateX(3px); }
 }
 
 /* Scrollbar */

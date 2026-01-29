@@ -150,7 +150,8 @@ python run.py status             # Show current status and settings
 | `--limit N` | Limit messages per channel (default: unlimited) |
 | `--channel NAME/ID` | Only archive specific channel (can repeat) |
 | `--download-attachments` | Download images/files locally (default: off) |
-| `--delay N` | Delay N seconds between API batches to avoid rate limits |
+| `--skip-empty` | Skip channels with no access or zero messages (default: off) |
+| `--delay N` | Delay N seconds every 100 messages to avoid rate limits |
 
 **Examples:**
 ```bash
@@ -166,7 +167,7 @@ python run.py start --channel general --channel announcements
 # Download all attachments (images, files) locally
 python run.py start --download-attachments
 
-# Avoid rate limits with delay (recommended for large archives)
+# Avoid rate limits with delay (pauses 1 second every 100 messages)
 python run.py start --delay 1
 
 # Combine options
@@ -194,7 +195,8 @@ python discord_archiver.py <BOT_TOKEN> [update_interval_hours] [archive_path] [o
 #   --limit N              Limit messages per channel
 #   --channel NAME/ID      Only archive specific channel (can repeat)
 #   --download-attachments Download images/files locally
-#   --delay N              Delay N seconds between API batches
+#   --skip-empty           Skip channels with no access or zero messages
+#   --delay N              Delay N seconds every 100 messages
 
 # Examples:
 python discord_archiver.py "your-token" 24 ./discord_archive
@@ -306,6 +308,7 @@ The main archiving bot that connects to Discord and fetches messages.
 - Message limit per channel (`--limit N` flag)
 - Channel filtering (`--channel NAME/ID` flag)
 - Local attachment download with retry logic (`--download-attachments` flag)
+- Skip inaccessible/empty channels (`--skip-empty` flag)
 - Rate limit prevention (`--delay N` flag)
 
 **Output:**

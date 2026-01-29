@@ -7,9 +7,10 @@ Works on Windows, Linux, and macOS
 Flags supported:
   --include-bots          Include bot-authored messages in the archive (default: off)
   --download-attachments  Download images/files locally (default: off)
+  --skip-empty            Skip channels with no access or zero messages (default: off)
   --limit N               Limit messages per channel (default: unlimited)
   --channel NAME/ID       Only archive specific channel (can repeat)
-  --delay N               Delay N seconds between API batches (default: 0)
+  --delay N               Delay N seconds every 100 messages (default: 0)
 """
 
 import subprocess
@@ -127,14 +128,14 @@ def _require_questionary():
         sys.exit(1)
 
 
-def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[str], Optional[str]]:
+def prompt_start_options_interactive() -> Tuple[bool, bool, bool, Optional[str], List[str], Optional[str]]:
     """
     Firebase-init style flow:
       - checkbox toggles
       - prompts for values
       - summary + confirm
     Returns:
-      include_bots, download_attachments, message_limit, channel_filter, api_delay
+      include_bots, download_attachments, skip_empty, message_limit, channel_filter, api_delay
     """
     _require_questionary()
     import questionary  # type: ignore
@@ -162,6 +163,11 @@ def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[
                 checked=False,
                 value="download_attachments",
             ),
+            questionary.Choice(
+                "Skip channels with no access or zero messages (--skip-empty)",
+                checked=False,
+                value="skip_empty",
+            ),
         ],
     ).ask()
 
@@ -170,6 +176,7 @@ def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[
 
     include_bots = "include_bots" in selections
     download_attachments = "download_attachments" in selections
+    skip_empty = "skip_empty" in selections
 
     message_limit = questionary.text(
         "Message limit per channel? (leave blank for unlimited)",
@@ -191,7 +198,7 @@ def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[
         channel_filter = [c.strip() for c in channel_input.split(",") if c.strip()]
 
     api_delay = questionary.text(
-        "API delay seconds between API batches? (leave blank for 0)",
+        "API delay seconds every 100 messages? (leave blank for 0)",
         default="0",
         validate=lambda t: True if (t.strip().isdigit()) else "Enter a whole number (0, 1, 2...)",
     ).ask()
@@ -204,6 +211,7 @@ def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[
     summary = (
         f"Include bots: {include_bots}\n"
         f"Download attachments: {download_attachments}\n"
+        f"Skip empty channels: {skip_empty}\n"
         f"Limit: {message_limit or 'unlimited'}\n"
         f"Channels: {', '.join(channel_filter) if channel_filter else 'all'}\n"
         f"Delay: {api_delay or '0'}"
@@ -214,7 +222,7 @@ def prompt_start_options_interactive() -> Tuple[bool, bool, Optional[str], List[
     if not ok:
         raise KeyboardInterrupt
 
-    return include_bots, download_attachments, message_limit, channel_filter, api_delay
+    return include_bots, download_attachments, skip_empty, message_limit, channel_filter, api_delay
 
 
 # -----------------------------
@@ -393,12 +401,13 @@ def cmd_start():
 
     # If user ran: python run.py start  (no extra args) => interactive wizard
     if len(sys.argv) <= 2:
-        include_bots, download_attachments, message_limit, channel_filter, api_delay = prompt_start_options_interactive()
+        include_bots, download_attachments, skip_empty, message_limit, channel_filter, api_delay = prompt_start_options_interactive()
     else:
         include_bots = _has_flag("--include-bots")
         message_limit = _get_flag_value("--limit")
         channel_filter = _get_flag_values("--channel")
         download_attachments = _has_flag("--download-attachments")
+        skip_empty = _has_flag("--skip-empty")
         api_delay = _get_flag_value("--delay")
 
     print_info("Starting Discord archiver...")
@@ -409,6 +418,8 @@ def cmd_start():
         print_success(f"Channel filter: {', '.join(channel_filter)}")
     if download_attachments:
         print_success("Download attachments: enabled")
+    if skip_empty:
+        print_success("Skip empty channels: enabled")
     if api_delay:
         print_success(f"API delay: {api_delay}s between batches")
 
@@ -423,6 +434,8 @@ def cmd_start():
         cmd.extend(["--channel", channel])
     if download_attachments:
         cmd.append("--download-attachments")
+    if skip_empty:
+        cmd.append("--skip-empty")
     if api_delay:
         cmd.extend(["--delay", api_delay])
 
@@ -551,9 +564,10 @@ def cmd_start():
             "update_interval_hours": interval,
             "include_bots": include_bots,
             "download_attachments": download_attachments,
-            "limit": message_limit,              
-            "channels": channel_filter,          
-            "delay": api_delay,                  
+            "skip_empty": skip_empty,
+            "limit": message_limit,
+            "channels": channel_filter,
+            "delay": api_delay,
         }
         save_archiver_settings(settings_snapshot)
 
@@ -956,6 +970,7 @@ def cmd_status():
         console.print("[cyan]Last archiver settings:[/cyan]")
         console.print(f"  Include bots:          {saved.get('include_bots', False)}")
         console.print(f"  Download attachments:  {saved.get('download_attachments', False)}")
+        console.print(f"  Skip empty channels:   {saved.get('skip_empty', False)}")
         console.print(f"  Limit:                 {saved.get('limit') or 'unlimited'}")
         chs = saved.get("channels") or []
         console.print(f"  Channels:              {', '.join(chs) if chs else 'all'}")
@@ -1014,7 +1029,8 @@ def cmd_help():
     console.print("  --limit N               Limit messages per channel (default: unlimited)")
     console.print("  --channel NAME/ID       Only archive specific channel (can repeat)")
     console.print("  --download-attachments  Download images/files locally (default: off)")
-    console.print("  --delay N               Delay N seconds between API batches (default: 0)")
+    console.print("  --skip-empty            Skip channels with no access/zero messages (default: off)")
+    console.print("  --delay N               Delay N seconds every 100 messages (default: 0)")
     console.print()
     console.print("[blue]USAGE:[/blue]")
     console.print("[blue]1)[/blue] python run.py setup[green]   First time - creates .env[/green]")

@@ -497,6 +497,18 @@ function displaySearchResults(results, query) {
 // ============================================
 // Quick Search (Current Page)
 // ============================================
+
+// Scroll to and highlight a message by hash
+function scrollToMessage(hash) {
+  if (!hash) return;
+  const target = document.querySelector(hash);
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('message-highlighted');
+    setTimeout(() => target.classList.remove('message-highlighted'), 3000);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
@@ -517,17 +529,15 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize author autocomplete
   AuthorAutocomplete.init();
 
-  // Scroll to message if hash present
+  // Scroll to message if hash present on page load
   if (window.location.hash) {
-    setTimeout(() => {
-      const target = document.querySelector(window.location.hash);
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        target.classList.add('message-highlighted');
-        setTimeout(() => target.classList.remove('message-highlighted'), 3000);
-      }
-    }, 100);
+    setTimeout(() => scrollToMessage(window.location.hash), 100);
   }
+});
+
+// Handle hash changes (e.g., clicking search results on same page)
+window.addEventListener('hashchange', function() {
+  scrollToMessage(window.location.hash);
 });
 
 function quickSearchPage(query) {

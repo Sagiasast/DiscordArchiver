@@ -581,11 +581,8 @@ class HTMLGenerator:
         except Exception:
             uid = 0
 
-        fallback = self._avatar_svg_data_uri(uid, display_name)
-
-        # Use real avatar if present, but ALWAYS fallback on error
-        src = author.get("avatar_url") or fallback
-        onerror = f"this.onerror=null;this.src='{fallback}';"
+        # Use deterministic colored SVG avatar (fully offline, no external requests)
+        avatar_svg = self._avatar_svg_data_uri(uid, display_name)
 
         # Pin indicator
         pin_indicator = ''
@@ -603,7 +600,7 @@ class HTMLGenerator:
         return f"""
         <div class="message{pinned_class}" id="msg-{msg['id']}">
             <div class="message-avatar">
-                <img src="{src}" alt="" onerror="{onerror}">
+                <img src="{avatar_svg}" alt="">
             </div>
             <div class="message-content">
                 {reply_html}
