@@ -343,6 +343,9 @@ class HTMLGenerator:
         if not messages_file.exists():
             return
 
+        # Copy attachments from archive to HTML output
+        self.copy_attachments(channel_path, output_dir, channel["id"])
+
         with open(messages_file, "r", encoding="utf-8") as f:
             messages = json.load(f)
 
@@ -425,6 +428,9 @@ class HTMLGenerator:
         messages_file = thread_path / 'messages.json'
         if not messages_file.exists():
             return
+
+        # Copy thread attachments from archive to HTML output
+        self.copy_attachments(thread_path, output_dir, thread_info["id"])
 
         with open(messages_file, 'r', encoding='utf-8') as f:
             messages = json.load(f)
@@ -609,7 +615,7 @@ class HTMLGenerator:
                     {' <span class="message-bot-tag">BOT</span>' if author.get('bot') else ''}
                 </div>
                 <div class="message-text">{content}</div>
-                {self.generate_attachments_html(msg.get('attachments', []))}
+                {self.generate_attachments_html(msg.get('attachments', []), channel_id)}
                 {self.generate_embeds_html(msg.get('embeds', []))}
                 {self.generate_reactions_html(msg.get('reactions', []))}
                 {thread_html}
@@ -645,7 +651,7 @@ class HTMLGenerator:
                     <span class="message-timestamp-inline">{timestamp}</span>
                     {pin_indicator}{content}
                 </div>
-                {self.generate_attachments_html(msg.get('attachments', []))}
+                {self.generate_attachments_html(msg.get('attachments', []), channel_id)}
                 {self.generate_embeds_html(msg.get('embeds', []))}
                 {self.generate_reactions_html(msg.get('reactions', []))}
                 {thread_html}
@@ -691,25 +697,49 @@ class HTMLGenerator:
         content = content.replace("\n", "<br>")
         return content
 
-    def generate_attachments_html(self, attachments: List[Dict]) -> str:
-        """Generate HTML for attachments"""
+    def copy_attachments(self, channel_path: Path, output_dir: Path, channel_id: int) -> None:
+        """Copy attachments from archive to HTML output directory"""
+        src_attachments = channel_path / "attachments"
+        if not src_attachments.exists():
+            return
+
+        dest_attachments = output_dir / "attachments" / f"channel_{channel_id}"
+        dest_attachments.mkdir(parents=True, exist_ok=True)
+
+        for attachment_file in src_attachments.iterdir():
+            if attachment_file.is_file():
+                dest_file = dest_attachments / attachment_file.name
+                if not dest_file.exists():
+                    shutil.copyfile(attachment_file, dest_file)
+
+    def generate_attachments_html(self, attachments: List[Dict], channel_id: int = None) -> str:
+        """Generate HTML for attachments, using local paths when available"""
         if not attachments:
             return ""
 
         html_parts = ['<div class="attachments">']
         for att in attachments:
+            # Use local path if available, otherwise fall back to CDN URL
+            if att.get("local_path") and channel_id is not None:
+                # local_path is like "attachments/123_file.png"
+                # We need to point to "attachments/channel_<id>/<filename>"
+                local_filename = Path(att["local_path"]).name
+                src_url = f"attachments/channel_{channel_id}/{quote(local_filename)}"
+            else:
+                src_url = att["url"]
+
             if att.get("content_type", "").startswith("image/"):
                 html_parts.append(
                     f'<div class="attachment attachment-image">'
-                    f'<a href="{att["url"]}" target="_blank">'
-                    f'<img src="{att["url"]}" alt="{html.escape(att.get("filename", "image"))}" loading="lazy">'
+                    f'<a href="{src_url}" target="_blank">'
+                    f'<img src="{src_url}" alt="{html.escape(att.get("filename", "image"))}" loading="lazy">'
                     f"</a>"
                     f"</div>"
                 )
             else:
                 html_parts.append(
                     f'<div class="attachment attachment-file">'
-                    f'<a href="{att["url"]}" target="_blank">'
+                    f'<a href="{src_url}" target="_blank">'
                     f'📎 {html.escape(att.get("filename", "file"))} ({self.format_bytes(att.get("size", 0))})'
                     f"</a>"
                     f"</div>"
