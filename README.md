@@ -16,16 +16,16 @@ A complete Discord server archiving system with full-text search capabilities. A
 ## Quick Start
 
 ```bash
-# 1. Setup (first time only)
+# 1) First-time setup (installs deps + creates .env)
 python run.py setup
 
-# 2. Edit .env and add your Discord bot token
+# 2) Edit .env and add your Discord bot token
 # DISCORD_BOT_TOKEN=your_bot_token_here
 
-# 3. Start archiving
+# 3) Start archiving (uses interactive console if no flags)
 python run.py start
 
-# 4. Generate HTML and view
+# 4) Generate HTML and view in your browser
 python run.py view
 ```
 
@@ -48,7 +48,7 @@ Ready to go! The `run.py` script works on **Windows, Linux, and macOS**.
    python run.py setup
    ```
    This will:
-   - Install required packages (`discord.py`)
+   - Install required packages (`discord.py`, `rich`, `questionary`)
    - Create a `.env` configuration file
 
 3. **Configure your bot token**
@@ -131,15 +131,16 @@ This will create a "Seeded Validation" category with test channels containing ~5
 #### Setup Commands
 ```bash
 python run.py setup          # Install dependencies and create .env
-python run.py status         # Show current status
+python run.py status         # Show current status and archiever settings
 ```
 
 #### Archiver Commands
 ```bash
-python run.py start [options]    # Start archiver in background
+python run.py start [options]    # Start archiver in background (interactive console if no flags)
 python run.py stop               # Stop background archiver
 python run.py archive [options]  # Run archiver in foreground
 python run.py logs               # Show archiver logs
+python run.py status             # Show current status and settings
 ```
 
 **Archiver Options:**
@@ -179,13 +180,6 @@ python run.py serve [port]   # Start local web server (default: 8000)
 python run.py view [port]    # Generate HTML and start server
 ```
 
-<!-- ### Bot Commands
-
-Once the bot is running, use these commands in Discord:
-
-- `!archive_full` - Perform a full archive of all messages
-- `!archive_update` - Update archive with new messages only
-- `!archive_status` - Show archive statistics -->
 
 ### Direct Script Usage
 
@@ -260,7 +254,7 @@ graph BT
 ```
 discord-archive/
 ├── run.py                    # CLI 
-├── discord_archiver.py       # Discord bot for archiving
+├── discord_archiver.py       # Discord archiving bot
 ├── html_generator.py         # Static HTML + search index generator
 ├── archive_search.py         # Search tool
 ├── requirements.txt          # Python dependencies
@@ -283,7 +277,9 @@ discord-archive/
 │       ├── channels.json
 │       └── channel_<id>/
 │           ├── messages.json
-│           └── messages.txt
+│           ├── messages.txt
+            └── attachments/ # (optional) downloaded files
+               └── <msgid>_<filename>
 │
 └── discord_html/             # Generated HTML output
     └── server_<id>/
@@ -393,6 +389,8 @@ Cross-platform CLI helper script for managing the entire workflow.
 
 **Features:**
 - Works on Windows, Linux, and macOS
+- **Interactive Console**: Run `start` without flags to configure options interactively.
+- **Rich UI**: Progress bars and status displays.
 - Simplified command interface
 - Real-time progress display during archiving
 - Automatic dependency installation

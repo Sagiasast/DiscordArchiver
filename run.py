@@ -22,8 +22,11 @@ import time
 from typing import Optional, List, Tuple
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, ProgressColumn
 from rich.panel import Panel
+from rich.align import Align
+from rich.text import Text
+from rich.spinner import Spinner
 
 # Configuration
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -42,7 +45,13 @@ console = Console()
 # Rich printing helpers
 # -----------------------------
 def print_header():
-    console.print(Panel.fit("[bold blue]Discord Server Archiver[/bold blue]", border_style="blue"))
+    console.print(
+        Panel.fit(
+            "[bold blue]Discord Server Archiver[/bold blue]\n",
+            border_style="bright_blue",
+            padding=(0, 4)
+        )
+    )
     console.print()
 
 
@@ -65,6 +74,19 @@ def print_info(msg: str):
 def print_step(step: str, msg: str):
     console.print(f"[cyan][{step}][/cyan] {msg}")
 
+
+class LiveOnlySpinnerColumn(ProgressColumn):
+    def __init__(self, live_task_id_getter):
+        super().__init__()
+        self._get_live_task_id = live_task_id_getter
+        self._spinner = Spinner("dots")
+
+    def render(self, task):
+        live_id = self._get_live_task_id()
+        if live_id is not None and task.id == live_id and not task.finished:
+            return self._spinner.render(task.get_time())
+        # archived/static tasks: show a check
+        return Text("✓", style="green")
 
 # -----------------------------
 # Env helpers
@@ -98,7 +120,7 @@ def get_python_cmd():
 # -----------------------------
 def _require_questionary():
     try:
-        import questionary  # noqa: F401
+        import questionary  
     except ImportError:
         print_error("Missing dependency: questionary")
         print_info("Run: pip install questionary")
@@ -436,21 +458,25 @@ def cmd_start():
     print_success(f"Archiver started (PID: {process.pid})")
     console.print()
 
-    # Track progress state
+    current_server = None
+    current_channel = None
     archived_messages = 0
     channels_done = 0
     archive_complete = False
 
+    live_task_id = None
+    def get_live_task_id():
+        return live_task_id
+
     with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TextColumn("[cyan]{task.fields[status]}"),
+        LiveOnlySpinnerColumn(get_live_task_id),
+        TextColumn("{task.description}"),
         console=console,
         transient=False,
     ) as progress:
-        main_task = progress.add_task("[cyan]Waiting for bot to connect...", total=None, status="")
+        
+        live_task_id = progress.add_task("[cyan]Waiting for bot to connect...", total=None)
 
-        # Monitor log file for progress
         try:
             with open(LOG_FILE, "r", encoding="utf-8") as log:
                 while is_archiver_running() and not archive_complete:
@@ -458,50 +484,64 @@ def cmd_start():
                     if not line:
                         time.sleep(0.1)
                         continue
-
                     line = line.strip()
                     if not line:
                         continue
 
                     parsed = parse_archiver_line(line)
+                    if not parsed:
+                        continue
 
-                    if parsed:
-                        if parsed["type"] == "logged_in":
-                            progress.update(main_task, description="[cyan]Bot connected, waiting for archive...")
+                    t = parsed["type"]
 
-                        elif parsed["type"] == "server_start":
-                            progress.update(main_task, description=f"[cyan]Archiving: {parsed['name']}")
+                    if t == "logged_in":
+                        progress.update(live_task_id, description="[cyan]Bot connected, waiting for archive...")
 
-                        elif parsed["type"] == "channel_start":
-                            progress.update(main_task, status=f"#{parsed['name']}")
+                    elif t == "server_start":
+                        current_server = parsed["name"]
+                        progress.update(live_task_id, description=f"[cyan]Archiving: {current_server}")
 
-                        elif parsed["type"] == "progress":
-                            progress.update(main_task, status=f"#{parsed['channel']} [{parsed['count']:,} msgs]")
+                    elif t == "channel_start":
+                        current_channel = parsed["name"]
+                        progress.update(live_task_id, description=f"[cyan]Archiving: {current_server} #{current_channel}")
 
-                        elif parsed["type"] == "channel_done":
-                            channels_done += 1
-                            archived_messages += parsed["count"]
-                            progress.update(main_task, status=f"✓ #{parsed['name']} ({parsed['count']:,} msgs)")
+                    elif t == "progress":
+                        progress.update(
+                            live_task_id,
+                            description=f"[cyan]Archiving: {current_server} #{parsed['channel']} [{parsed['count']:,} msgs]"
+                        )
 
-                        elif parsed["type"] == "server_done":
-                            progress.update(
-                                main_task,
-                                description="[green]Archive complete!",
-                                status=f"{archived_messages:,} messages archived",
-                            )
-                            archive_complete = True
+                    elif t == "channel_done":
+                        channels_done += 1
+                        archived_messages += parsed["count"]
 
-                        elif parsed["type"] == "archive_done":
-                            progress.update(
-                                main_task,
-                                description="[green]Archive complete!",
-                                status=f"{archived_messages:,} total messages",
-                            )
-                            archive_complete = True
+                        # Add archived line (will appear ABOVE the live line)
+                        progress.add_task(
+                            f"[green]Archived:[/green] {current_server} #{parsed['name']} [{parsed['count']:,} msgs]",
+                            total=1,
+                            completed=1,
+                        )
+
+                        # Keep live line ready for next channel
+                        progress.update(live_task_id, description=f"[cyan]Archiving: {current_server}")
+
+                    elif t in ("server_done", "archive_done"):
+                        archive_complete = True
+
+                # Remove live line and add final line LAST
+                progress.remove_task(live_task_id)
+                live_task_id = None  # so spinner column won't try to spin anything
+
+                progress.add_task(
+                    f"[green]Archive complete![/green] {archived_messages:,} messages archived",
+                    total=1,
+                    completed=1,
+                )
 
         except KeyboardInterrupt:
             console.print()
             print_info("Progress display stopped (archiver continues in background)")
+
 
     console.print()
     if archive_complete:
@@ -511,15 +551,16 @@ def cmd_start():
             "update_interval_hours": interval,
             "include_bots": include_bots,
             "download_attachments": download_attachments,
-            "limit": message_limit,              # string or None
-            "channels": channel_filter,          # list
-            "delay": api_delay,                  # string or None
+            "limit": message_limit,              
+            "channels": channel_filter,          
+            "delay": api_delay,                  
         }
         save_archiver_settings(settings_snapshot)
 
     print_info(f"Archiver running in background (PID: {process.pid})")
     print_info(f"Next auto-update in {interval} hours")
     print_info("Use 'python run.py stop' to stop the archiver")
+    print_info("Use 'python run.py status' to see archieve status and settings")
 
 
 # -----------------------------
@@ -590,9 +631,10 @@ def parse_archiver_line(line: str):
         return {"type": "progress", "count": int(progress_match.group(1)), "channel": progress_match.group(2)}
 
     # Match: "Channel archived: #channelname (123 new messages)"
-    channel_done = re.search(r"Channel archived: #(.+?) \((\d+) new messages\)", line)
+    channel_done = re.search(r"Channel archived:\s+#(?P<name>[^ ]+)\s+\((?P<count>\d+)\s+new messages",line)
+    # if channel_done:
     if channel_done:
-        return {"type": "channel_done", "name": channel_done.group(1), "count": int(channel_done.group(2))}
+        return {"type": "channel_done","name": channel_done.group("name"),"count": int(channel_done.group("count"))}
 
     # Match: "Server archive completed: ServerName"
     server_done = re.search(r"Server archive completed: (.+)$", line)

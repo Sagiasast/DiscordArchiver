@@ -275,7 +275,7 @@ class HTMLGenerator:
 
         return f'''
         <div class="thread-indicator">
-            <span class="thread-icon">💬</span>
+            <span class="thread-icon"> 🧵</span>
             <a href="{thread_link}" class="thread-link">
                 <span class="thread-name">{html.escape(thread_info.get('name', 'Thread'))}</span>
                 <span class="thread-count">{thread_info.get('message_count', 0)} replies</span>
